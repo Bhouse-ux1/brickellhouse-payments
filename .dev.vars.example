@@ -1,0 +1,22 @@
+# Copy to .dev.vars for local Worker development. Never commit real values.
+ENVIRONMENT=development
+BETTER_AUTH_SECRET=replace-with-at-least-32-random-characters
+BETTER_AUTH_URL=http://127.0.0.1:5173
+
+# Microsoft Entra ID (configure later)
+MICROSOFT_CLIENT_ID=
+MICROSOFT_CLIENT_SECRET=
+MICROSOFT_TENANT_ID=
+
+# Optional local PostgreSQL connection. Production uses the HYPERDRIVE binding.
+DATABASE_URL=
+
+# Stripe Terminal (configure later; no live integration exists yet)
+STRIPE_SECRET_KEY=
+STRIPE_TERMINAL_READER_ID=
+STRIPE_TERMINAL_LOCATION_ID=
+STRIPE_TERMINAL_WEBHOOK_SECRET=
+
+# Receipt delivery (configure later)
+RESEND_API_KEY=
+EMAIL_FROM=BrickellHouse <receipts@example.com>

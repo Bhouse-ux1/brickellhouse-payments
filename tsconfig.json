@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "useDefineForClassFields": true,
+    "lib": ["ES2023", "DOM", "DOM.Iterable", "WebWorker"],
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "types": ["vite/client"],
+    "baseUrl": ".",
+    "paths": { "@/*": ["src/*"], "@worker/*": ["worker/*"] }
+  },
+  "include": ["src", "worker", "vite.config.ts", "vitest.config.ts", "drizzle.config.ts", "worker-configuration.d.ts"]
+}
