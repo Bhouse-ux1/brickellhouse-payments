@@ -27,7 +27,7 @@ The current login is a **temporary testing-only control**, not the final employe
 
 ## Required Cloudflare configuration
 
-Keep the existing `HYPERDRIVE` binding. Add these values with Cloudflare secret/configuration management; never commit real values:
+Keep the existing `HYPERDRIVE` binding. `STRIPE_LIVE_MODE_ONLY=true` is committed as non-secret Worker configuration. Add the remaining values with Cloudflare secret management; never commit real values:
 
 ```text
 TEST_ACCESS_PASSWORD
@@ -36,7 +36,6 @@ STRIPE_SECRET_KEY
 STRIPE_TERMINAL_READER_ID
 STRIPE_TERMINAL_LOCATION_ID
 STRIPE_TERMINAL_WEBHOOK_SECRET
-STRIPE_LIVE_MODE_ONLY=true
 ```
 
 `STRIPE_TERMINAL_READER_ID` must identify the real registered S710 and `STRIPE_TERMINAL_LOCATION_ID` must be that reader's actual live Stripe Location. Configure the Stripe webhook URL as:
