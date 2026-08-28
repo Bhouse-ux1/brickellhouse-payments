@@ -48,7 +48,7 @@ After the sender is verified and Worker secrets are configured, run once:
 npm run auth:bootstrap-admin
 ```
 
-The command creates one Admin with a random inaccessible bootstrap password and requests a secure password-setup email. It refuses to overwrite an existing account.
+The command is idempotent: it creates or safely recovers the configured Admin, ensures exactly one Better Auth `local:credential` account with a random inaccessible bootstrap password, preserves completed passwords, and requests a fresh one-hour setup link only while the Admin remains unverified. Resend acceptance and the production setup origin are mandatory.
 
 ## Verified-payment receipts
 

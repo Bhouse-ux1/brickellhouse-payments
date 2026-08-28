@@ -15,7 +15,17 @@ import type { WorkerBindings } from "@worker/types";
 
 export const INACTIVITY_TIMEOUT_SECONDS = 30 * 60;
 export const LOGIN_RATE_LIMIT = { window: 5 * 60, max: 5 } as const;
+export const PUBLIC_SIGNUP_ENABLED = false;
 const PASSWORD_RESET_SECONDS = 60 * 60;
+
+type ProductionAuthRuntimeOptions = {
+  throwOnEmailFailure?: boolean;
+  onAuthenticationEmailAccepted?: (event: {
+    kind: "password-reset" | "verify-email";
+    url: string;
+    providerMessageId: string;
+  }) => void | Promise<void>;
+};
 
 const adminRole = defaultAc.newRole(adminAc.statements);
 const staffRole = defaultAc.newRole({ user: [], session: [] });
@@ -24,22 +34,16 @@ export function productionAuthConfigured(env: WorkerBindings): boolean {
   return Boolean(env.BETTER_AUTH_SECRET && env.BETTER_AUTH_SECRET.length >= 32 && env.BETTER_AUTH_URL?.startsWith("https://"));
 }
 
-export function createProductionAuth(env: WorkerBindings) {
+export function createProductionAuth(env: WorkerBindings, runtime: ProductionAuthRuntimeOptions = {}) {
   const db = createDatabase(env);
   if (!db || !productionAuthConfigured(env) || !env.BETTER_AUTH_SECRET || !env.BETTER_AUTH_URL) {
     throw new Error("Production authentication is not configured.");
   }
   const sendAuthEmail = async (input: { user: { id: string; email: string }; url: string; token: string; kind: "password-reset" | "verify-email"; request?: Request }) => {
     const fingerprint = await emailFingerprint(input.token);
+    let providerMessageId: string;
     try {
-      await sendAuthenticationEmail({ env, to: input.user.email, kind: input.kind, url: input.url, tokenFingerprint: fingerprint });
-      await recordAuthAudit({
-        db,
-        action: input.kind === "password-reset" ? "PASSWORD_RESET_EMAIL_SENT" : "EMAIL_VERIFICATION_SENT",
-        entityId: input.user.id,
-        actorUserId: input.user.id,
-        details: input.request ? requestAuditContext(input.request) : {},
-      });
+      providerMessageId = await sendAuthenticationEmail({ env, to: input.user.email, kind: input.kind, url: input.url, tokenFingerprint: fingerprint });
     } catch (error) {
       console.error("Authentication email delivery failed", {
         kind: input.kind,
@@ -53,7 +57,17 @@ export function createProductionAuth(env: WorkerBindings) {
         actorUserId: input.user.id,
         details: input.request ? requestAuditContext(input.request) : {},
       });
+      if (runtime.throwOnEmailFailure) throw new Error("Authentication email delivery was rejected.", { cause: error });
+      return;
     }
+    await recordAuthAudit({
+      db,
+      action: input.kind === "password-reset" ? "PASSWORD_RESET_EMAIL_SENT" : "EMAIL_VERIFICATION_SENT",
+      entityId: input.user.id,
+      actorUserId: input.user.id,
+      details: input.request ? requestAuditContext(input.request) : {},
+    });
+    await runtime.onAuthenticationEmailAccepted?.({ kind: input.kind, url: input.url, providerMessageId });
   };
 
   return betterAuth({
@@ -74,7 +88,7 @@ export function createProductionAuth(env: WorkerBindings) {
     }),
     emailAndPassword: {
       enabled: true,
-      disableSignUp: true,
+      disableSignUp: !PUBLIC_SIGNUP_ENABLED,
       requireEmailVerification: true,
       minPasswordLength: 12,
       maxPasswordLength: 128,

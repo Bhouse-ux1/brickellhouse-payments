@@ -60,6 +60,7 @@ export const sessions = pgTable("sessions", {
 
 export const accounts = pgTable("accounts", {
   id: text("id").primaryKey(),
+  issuer: text("issuer").notNull(),
   accountId: text("account_id").notNull(),
   providerId: text("provider_id").notNull(),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
@@ -73,6 +74,7 @@ export const accounts = pgTable("accounts", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
+  uniqueIndex("accounts_issuer_account_uidx").on(table.issuer, table.accountId),
   uniqueIndex("accounts_provider_account_uidx").on(table.providerId, table.accountId),
   index("accounts_user_id_idx").on(table.userId),
 ]);
@@ -84,7 +86,10 @@ export const verifications = pgTable("verifications", {
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
-}, (table) => [uniqueIndex("verifications_identifier_value_uidx").on(table.identifier, table.value)]);
+}, (table) => [
+  index("verifications_identifier_idx").on(table.identifier),
+  uniqueIndex("verifications_identifier_value_uidx").on(table.identifier, table.value),
+]);
 
 export const rateLimits = pgTable("rate_limits", {
   id: text("id").primaryKey(),

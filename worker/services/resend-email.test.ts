@@ -9,6 +9,7 @@ describe("Resend boundary", () => {
       expect(headers.get("idempotency-key")).toBe("receipt/transaction-1/v1");
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       expect(body).not.toHaveProperty("apiKey");
+      expect(body.from).toBe("BrickellHouse Management <receipts@example.com>");
       return new Response(JSON.stringify({ id: "email_1" }), { status: 200 });
     });
     const input = {

@@ -10,5 +10,6 @@ Read `README.md` first. This is the standalone `Bhouse-ux1/brickellhouse-payment
 - The additive auth/receipt migration is applied. It did not change transaction, item, attempt, Stripe event, product, or session counts.
 - Resend sends authentication messages and receipts only when `RESEND_API_KEY` and a verified `EMAIL_FROM` are configured.
 - A receipt is queued only by independently reconciled PAID state and uses both database uniqueness and a versioned Resend idempotency key.
-- Production deployment must wait until the initial Admin email, verified Resend sender, Resend API key, and Better Auth secret are configured and the bootstrap password-setup email can be received. Do not replace the working production gate with an unbootstrapped auth system.
+- The partial initial Admin was recovered against Better Auth 1.7.2's issuer-scoped account schema. One unverified Admin, one inaccessible bootstrap credential, and one one-hour setup token exist; Resend accepted the setup email from `BrickellHouse Management <orders@brickellhouse.org>`.
+- Production deployment must wait until the administrator personally completes the emailed password setup. Do not replace the working production gate before that verification.
 - Never initiate a payment, command the S710, or send a real receipt as a configuration test.
