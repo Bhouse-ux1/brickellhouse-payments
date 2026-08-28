@@ -27,7 +27,7 @@ Authentication is self-hosted Better Auth using the existing Neon/Drizzle user, 
 - Products, transactions, terminal actions, and receipt resend require an active verified employee. Accounting and staff administration require Admin.
 - Login, logout, password-reset, email-delivery, and employee-administration events are stored in `audit_events` without passwords or credentials.
 
-The temporary `TEST_ACCESS_PASSWORD` / `TEST_SESSION_SECRET` code and bindings are removed. Those two Cloudflare secrets can be deleted only after this production authentication build is deployed and the first Admin login is verified.
+The temporary `TEST_ACCESS_PASSWORD` / `TEST_SESSION_SECRET` code and Cloudflare bindings are removed. Archived temporary identities remain only when required for immutable historical transaction attribution; they are inactive, banned, non-privileged, and ineligible for password reset.
 
 ### First Admin bootstrap
 
@@ -56,7 +56,7 @@ Successful Stripe reconciliation atomically marks the trusted transaction PAID a
 
 The responsive receipt renders only trusted stored snapshots: transaction reference and payment time, item name, quantity, unit and line amounts, processing fee, exact total, and optional card brand/last four. It excludes GL codes and all Stripe, webhook, reader, and database IDs. Email failure never changes PAID status. An authenticated employee can retry a failed receipt or explicitly resend a sent receipt; an intentional resend increments the delivery version.
 
-Receipt/authentication email delivery requires these Worker secrets:
+Receipt/authentication email delivery requires the `RESEND_API_KEY` Worker secret and the committed `EMAIL_FROM` sender variable:
 
 ```text
 RESEND_API_KEY
@@ -67,12 +67,11 @@ EMAIL_FROM
 
 ## Cloudflare configuration
 
-Committed non-secret configuration includes `STRIPE_LIVE_MODE_ONLY=true`, `BETTER_AUTH_URL`, and the existing `HYPERDRIVE` binding. Configure these with `wrangler secret put`; do not commit values:
+Committed non-secret configuration includes `STRIPE_LIVE_MODE_ONLY=true`, `BETTER_AUTH_URL`, `EMAIL_FROM`, and the existing `HYPERDRIVE` binding. Configure these secrets with `wrangler secret put`; do not commit values:
 
 ```text
 BETTER_AUTH_SECRET
 RESEND_API_KEY
-EMAIL_FROM
 STRIPE_SECRET_KEY
 STRIPE_TERMINAL_READER_ID
 STRIPE_TERMINAL_LOCATION_ID

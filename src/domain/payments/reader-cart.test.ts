@@ -33,4 +33,20 @@ describe("trusted S710 cart", () => {
     expect(() => buildTrustedReaderCart({ subtotalCents: 5_500, processingFeeCents: 188, totalCents: 5_688 }, [item])).toThrow(/processing fee/u);
     expect(() => buildTrustedReaderCart({ subtotalCents: 5_500, processingFeeCents: 190, totalCents: 5_689 }, [item])).toThrow(/total/u);
   });
+
+  it("shows trusted printing quantities and the same authoritative total on the S710", () => {
+    const cart = buildTrustedReaderCart(
+      { subtotalCents: 130, processingFeeCents: 34, totalCents: 164 },
+      [
+        { productId: "black_white_printing", productNameSnapshot: "Black & White Printing", unitPriceCentsSnapshot: 10, quantity: 3, lineTotalCents: 30 },
+        { productId: "color_printing", productNameSnapshot: "Color Printing", unitPriceCentsSnapshot: 25, quantity: 4, lineTotalCents: 100 },
+      ],
+    );
+    expect(cart.lineItems).toEqual([
+      { description: "Black & White Printing", amountCents: 10, quantity: 3 },
+      { description: "Color Printing", amountCents: 25, quantity: 4 },
+      { description: "Processing Fee", amountCents: 34, quantity: 1 },
+    ]);
+    expect(cart.totalCents).toBe(164);
+  });
 });

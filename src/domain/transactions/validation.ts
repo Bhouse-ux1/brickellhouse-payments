@@ -20,6 +20,13 @@ export const checkoutRequestSchema = z.object({
 
 export type CheckoutRequest = z.infer<typeof checkoutRequestSchema>;
 
+export function parseQuantityInput(value: string): number | null {
+  const normalized = value.trim();
+  if (!/^\d+$/u.test(normalized)) return null;
+  const quantity = Number(normalized);
+  return Number.isSafeInteger(quantity) && quantity >= 1 && quantity <= MAX_QUANTITY ? quantity : null;
+}
+
 export function parseMoneyInput(value: string): number | null {
   const normalized = value.trim().replace(/^\$/, "").replaceAll(",", "");
   if (!/^\d{1,7}(\.\d{0,2})?$/.test(normalized)) return null;

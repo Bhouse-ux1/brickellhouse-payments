@@ -8,7 +8,7 @@ export type TrustedProduct = {
   active: boolean;
   terminalEnabled: boolean;
   quantityAllowed: boolean;
-  category: "Access" | "Keys" | "Maintenance" | "Valet";
+  category: "Access" | "Keys" | "Maintenance" | "Printing" | "Valet";
 };
 
 export const productCatalog: readonly TrustedProduct[] = [
@@ -21,5 +21,7 @@ export const productCatalog: readonly TrustedProduct[] = [
   { id: "unclogged_service", displayName: "Toilet or Sink Unclogged Service", priceCents: 3000, glCode: trustedGlCodeForProduct("unclogged_service"), active: true, terminalEnabled: true, quantityAllowed: true, category: "Maintenance" },
   { id: "thermostat_check", displayName: "Thermostat Reset or System Check", priceCents: 2500, glCode: trustedGlCodeForProduct("thermostat_check"), active: true, terminalEnabled: true, quantityAllowed: true, category: "Maintenance" },
   { id: "smoke_alarm_replacement", displayName: "Smoke Alarm Replacement", priceCents: 5500, glCode: trustedGlCodeForProduct("smoke_alarm_replacement"), active: true, terminalEnabled: true, quantityAllowed: true, category: "Maintenance" },
-  { id: "valet_parking", displayName: "Valet Parking", priceCents: 25000, glCode: trustedGlCodeForProduct("valet_parking"), active: true, terminalEnabled: true, quantityAllowed: false, category: "Valet" },
+  { id: "black_white_printing", displayName: "Black & White Printing", priceCents: 10, glCode: trustedGlCodeForProduct("black_white_printing"), active: true, terminalEnabled: true, quantityAllowed: true, category: "Printing" },
+  { id: "color_printing", displayName: "Color Printing", priceCents: 25, glCode: trustedGlCodeForProduct("color_printing"), active: true, terminalEnabled: true, quantityAllowed: true, category: "Printing" },
+  { id: "valet_parking", displayName: "Valet Parking", priceCents: 25000, glCode: trustedGlCodeForProduct("valet_parking"), active: true, terminalEnabled: true, quantityAllowed: true, category: "Valet" },
 ] as const;

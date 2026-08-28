@@ -9,6 +9,14 @@ import type { WorkerEnvironment } from "@worker/types";
 
 export const authRoutes = new Hono<WorkerEnvironment>();
 
+export function mayReceivePasswordReset(user: {
+  active: boolean;
+  banned: boolean;
+  role: string;
+}): boolean {
+  return user.active && !user.banned && ["ADMIN", "STAFF"].includes(user.role);
+}
+
 authRoutes.get("/session", async (c) => {
   const employee = await readAuthorizedEmployee(c.req.raw, c.env);
   return employee ? c.json({ employee }) : c.json({ error: "Authentication required" }, 401);
@@ -26,6 +34,18 @@ export async function handleProductionAuthRequest(request: Request, env: WorkerE
   if (["/sign-in/email", "/request-password-reset"].includes(authPath)) {
     const body = await requestCopy.json().catch(() => ({})) as { email?: unknown };
     if (typeof body.email === "string") email = body.email.trim().toLowerCase();
+  }
+  if (authPath === "/request-password-reset" && email) {
+    const [resetUser] = await db.select({
+      id: users.id, active: users.active, banned: users.banned, role: users.role,
+    }).from(users).where(eq(users.email, email)).limit(1);
+    if (resetUser && !mayReceivePasswordReset(resetUser)) {
+      await recordAuthAudit({
+        db, action: "PASSWORD_RESET_BLOCKED", entityId: resetUser.id,
+        details: { ...requestAuditContext(request), status: 200 },
+      });
+      return Response.json({ status: true });
+    }
   }
   const response = await createProductionAuth(env).handler(request);
   const context = requestAuditContext(request);

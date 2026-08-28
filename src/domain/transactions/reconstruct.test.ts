@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { calculateProcessingFee } from "@/domain/payments/processing-fee";
 import { productCatalog } from "@/domain/products/catalog";
 import { reconstructTrustedTransaction } from "./reconstruct";
-import { parseMoneyInput } from "./validation";
+import { parseMoneyInput, parseQuantityInput } from "./validation";
 
 describe("trusted transaction reconstruction", () => {
   it("ignores malicious browser prices, GL codes, fees, and totals", () => {
@@ -60,6 +60,38 @@ describe("trusted transaction reconstruction", () => {
       }, forged);
       expect(result.lines[0].glCodeSnapshot).toBe(product.id === "valet_parking" ? "40033" : "40090");
     }
+  });
+
+  it("keeps printing prices trusted and carries typed quantities through every total", () => {
+    const blackAndWhite = productCatalog.find((product) => product.id === "black_white_printing");
+    const color = productCatalog.find((product) => product.id === "color_printing");
+    expect(blackAndWhite).toMatchObject({ displayName: "Black & White Printing", priceCents: 10, glCode: "40090", quantityAllowed: true });
+    expect(color).toMatchObject({ displayName: "Color Printing", priceCents: 25, glCode: "40090", quantityAllowed: true });
+    expect(productCatalog.every((product) => product.quantityAllowed)).toBe(true);
+
+    const result = reconstructTrustedTransaction({
+      unitNumber: "2305", customerEmail: "resident@example.com",
+      items: [
+        { productId: "black_white_printing", quantity: 3, priceCents: 9999 },
+        { productId: "color_printing", quantity: 4, priceCents: 9999 },
+      ],
+    }, productCatalog);
+    expect(result.lines).toMatchObject([
+      { productNameSnapshot: "Black & White Printing", unitPriceCentsSnapshot: 10, quantity: 3, lineTotalCents: 30, glCodeSnapshot: "40090" },
+      { productNameSnapshot: "Color Printing", unitPriceCentsSnapshot: 25, quantity: 4, lineTotalCents: 100, glCodeSnapshot: "40090" },
+    ]);
+    expect(result.subtotalCents).toBe(130);
+    expect(result.processingFeeCents).toBe(34);
+    expect(result.totalCents).toBe(164);
+  });
+
+  it("accepts only typed whole-number quantities within the server limit", () => {
+    expect(parseQuantityInput("12")).toBe(12);
+    expect(parseQuantityInput(" 99 ")).toBe(99);
+    expect(parseQuantityInput("0")).toBeNull();
+    expect(parseQuantityInput("100")).toBeNull();
+    expect(parseQuantityInput("2.5")).toBeNull();
+    expect(parseQuantityInput("1e2")).toBeNull();
   });
 });
 

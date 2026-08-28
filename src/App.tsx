@@ -2,11 +2,11 @@ import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from
 import { NavLink, Route, Routes } from "react-router-dom";
 import {
   BellRing, Building2, CarFront, CircleParking, CreditCard, Droplets, KeyRound,
-  CalendarDays, Download, Landmark, LogOut, Minus, Plus, ReceiptText, Search, ShieldCheck, Thermometer, UserCog, Wind, Wrench, X,
+  CalendarDays, Download, Landmark, LogOut, Minus, Plus, Printer, ReceiptText, Search, ShieldCheck, Thermometer, UserCog, Wind, Wrench, X,
 } from "lucide-react";
 import { calculateProcessingFee } from "@/domain/payments/processing-fee";
 import { productCatalog, type TrustedProduct } from "@/domain/products/catalog";
-import { parseMoneyInput } from "@/domain/transactions/validation";
+import { MAX_QUANTITY, parseMoneyInput, parseQuantityInput } from "@/domain/transactions/validation";
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 type EmployeeRole = "ADMIN" | "STAFF";
@@ -24,7 +24,8 @@ const icons: Record<string, ComponentType<{ size?: number; strokeWidth?: number 
   parking_fob: CircleParking, elevator_fob: Building2, mailbox_key_copy: KeyRound,
   unit_key_copy: KeyRound, smoke_detector_battery: BellRing, ac_filter_replacement: Wind,
   unclogged_service: Droplets, thermostat_check: Thermometer,
-  smoke_alarm_replacement: BellRing, valet_parking: CarFront,
+  smoke_alarm_replacement: BellRing, black_white_printing: Printer,
+  color_printing: Printer, valet_parking: CarFront,
 };
 
 function Shell({ children, employeeName, employeeRole, onSignOut }: { children: ReactNode; employeeName: string; employeeRole: EmployeeRole; onSignOut: () => void }) {
@@ -134,11 +135,19 @@ function NewTransaction() {
     if (activeTransactionId) return;
     setNotice("");
     setQuantities((current) => {
-      const next = product.quantityAllowed ? Math.max(0, (current[product.id] ?? 0) + delta) : delta > 0 ? 1 : 0;
+      const next = product.quantityAllowed ? Math.min(MAX_QUANTITY, Math.max(0, (current[product.id] ?? 0) + delta)) : delta > 0 ? 1 : 0;
       const copy = { ...current };
       if (next) copy[product.id] = next; else delete copy[product.id];
       return copy;
     });
+  }
+
+  function setQuantity(product: CatalogProduct, value: string) {
+    if (activeTransactionId || !product.quantityAllowed) return;
+    const next = parseQuantityInput(value);
+    if (!next) return;
+    setNotice("");
+    setQuantities((current) => ({ ...current, [product.id]: next }));
   }
 
   async function prepareCharge() {
@@ -190,7 +199,7 @@ function NewTransaction() {
           <label className="email"><span>Resident email</span><input value={email} disabled={Boolean(activeTransactionId)} onChange={(e) => setEmail(e.target.value)} type="email" placeholder="resident@example.com" /></label>
         </div>
         <div className="sectionHead"><div><span>2 · Add charges</span><h2>Products & services</h2></div><label className="search"><Search size={15}/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search products"/></label></div>
-        <div className="filters">{["All", "Access", "Keys", "Maintenance", "Valet"].map((c) => <button key={c} className={category === c ? "active" : ""} onClick={() => setCategory(c)}>{c}</button>)}</div>
+        <div className="filters">{["All", "Access", "Keys", "Maintenance", "Printing", "Valet"].map((c) => <button key={c} className={category === c ? "active" : ""} onClick={() => setCategory(c)}>{c}</button>)}</div>
         <div className="custom">
           <div className="customTitle"><Wrench size={18}/><div><span>Custom Charge</span><small>For an item not listed</small></div></div>
           <label><span>Description</span><input value={description} disabled={Boolean(activeTransactionId)} onChange={(e) => setDescription(e.target.value)} placeholder="Describe the charge"/></label>
@@ -208,7 +217,7 @@ function NewTransaction() {
         {(unit || email) && <div className="residentMini"><Building2 size={16}/><div><strong>{unit ? `Unit ${unit}` : "Unit pending"}</strong><small>{email || "Email pending"}</small></div></div>}
         <div className={selected.length || custom ? "lines" : "lines empty"}>
           {!selected.length && !custom && <div className="emptyState"><ReceiptText size={23}/><strong>No charges yet</strong><span>Select a product or add a custom charge.</span></div>}
-          {selected.map((p) => <div className="line" key={p.id}><div><strong>{p.displayName}</strong><b>{money.format(p.priceCents * quantities[p.id] / 100)}</b></div><div className="lineBottom"><span className="qty"><button disabled={Boolean(activeTransactionId)} onClick={() => change(p, -1)}><Minus size={12}/></button><i>{quantities[p.id]}</i><button disabled={Boolean(activeTransactionId) || !p.quantityAllowed} onClick={() => change(p, 1)}><Plus size={12}/></button></span><button className="remove" disabled={Boolean(activeTransactionId)} onClick={() => change(p, -99)}>Remove</button></div></div>)}
+          {selected.map((p) => <div className="line" key={p.id}><div><strong>{p.displayName}</strong><b>{money.format(p.priceCents * quantities[p.id] / 100)}</b></div><div className="lineBottom"><span className="qty"><button aria-label={`Decrease ${p.displayName} quantity`} disabled={Boolean(activeTransactionId)} onClick={() => change(p, -1)}><Minus size={12}/></button><input aria-label={`${p.displayName} quantity`} disabled={Boolean(activeTransactionId) || !p.quantityAllowed} inputMode="numeric" min={1} max={MAX_QUANTITY} step={1} type="number" value={quantities[p.id]} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setQuantity(p, event.target.value)}/><button aria-label={`Increase ${p.displayName} quantity`} disabled={Boolean(activeTransactionId) || !p.quantityAllowed || quantities[p.id] >= MAX_QUANTITY} onClick={() => change(p, 1)}><Plus size={12}/></button></span><button className="remove" disabled={Boolean(activeTransactionId)} onClick={() => change(p, -MAX_QUANTITY)}>Remove</button></div></div>)}
           {custom && <div className="line customLine"><div><span><small>Custom charge</small><strong>{custom.description}</strong></span><b>{money.format(custom.amountCents / 100)}</b></div><button className="remove" disabled={Boolean(activeTransactionId)} onClick={() => setCustom(null)}><X size={11}/>Remove</button></div>}
         </div>
         <div className="totals"><div><span>Subtotal</span><b>{money.format(subtotal / 100)}</b></div><div><span>Processing fee</span><b>{money.format(fee / 100)}</b></div><div className="grand"><span>Total</span><b>{money.format(total / 100)}</b></div></div>
