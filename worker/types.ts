@@ -3,12 +3,10 @@ export type EmployeeRole = "ADMIN" | "MANAGER" | "EMPLOYEE" | "ACCOUNTING";
 export type WorkerBindings = {
   HYPERDRIVE?: Hyperdrive;
   DATABASE_URL?: string;
-  BETTER_AUTH_SECRET?: string;
-  BETTER_AUTH_URL?: string;
-  MICROSOFT_CLIENT_ID?: string;
-  MICROSOFT_CLIENT_SECRET?: string;
-  MICROSOFT_TENANT_ID?: string;
+  TEST_ACCESS_PASSWORD?: string;
+  TEST_SESSION_SECRET?: string;
   STRIPE_SECRET_KEY?: string;
+  STRIPE_LIVE_MODE_ONLY?: string;
   STRIPE_TERMINAL_READER_ID?: string;
   STRIPE_TERMINAL_LOCATION_ID?: string;
   STRIPE_TERMINAL_WEBHOOK_SECRET?: string;

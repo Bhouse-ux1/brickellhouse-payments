@@ -1,22 +1,20 @@
-# Copy to .dev.vars for local Worker development. Never commit real values.
+# Copy to .dev.vars only for local Worker development. Never commit real values.
 ENVIRONMENT=development
-BETTER_AUTH_SECRET=replace-with-at-least-32-random-characters
-BETTER_AUTH_URL=http://127.0.0.1:5173
 
-# Microsoft Entra ID (configure later)
-MICROSOFT_CLIENT_ID=
-MICROSOFT_CLIENT_SECRET=
-MICROSOFT_TENANT_ID=
+# Temporary controlled access. Replace with final employee authentication before production use.
+TEST_ACCESS_PASSWORD=replace-with-a-strong-temporary-password
+TEST_SESSION_SECRET=replace-with-at-least-32-random-characters
 
 # Optional local PostgreSQL connection. Production uses the HYPERDRIVE binding.
 DATABASE_URL=
 
-# Stripe Terminal (configure later; no live integration exists yet)
-STRIPE_SECRET_KEY=
-STRIPE_TERMINAL_READER_ID=
-STRIPE_TERMINAL_LOCATION_ID=
-STRIPE_TERMINAL_WEBHOOK_SECRET=
+# Physical Stripe S710 — LIVE MODE ONLY. Store production values as Cloudflare secrets.
+STRIPE_SECRET_KEY=sk_live_replace_me
+STRIPE_TERMINAL_READER_ID=tmr_replace_me
+STRIPE_TERMINAL_LOCATION_ID=tml_replace_me
+STRIPE_TERMINAL_WEBHOOK_SECRET=whsec_replace_me
+STRIPE_LIVE_MODE_ONLY=true
 
-# Receipt delivery (configure later)
+# Receipt delivery is intentionally not configured in this phase.
 RESEND_API_KEY=
-EMAIL_FROM=BrickellHouse <receipts@example.com>
+EMAIL_FROM=

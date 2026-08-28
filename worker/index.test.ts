@@ -15,8 +15,13 @@ describe("Worker API boundaries", () => {
     expect((await app.request("/api/accounting/summary", {}, {})).status).toBe(401);
   });
 
-  it("keeps an unconfigured auth handler unavailable", async () => {
-    const response = await createApp().request("/api/auth/ok", {}, {});
+  it("removes the Microsoft auth handler and fails closed when test access is unconfigured", async () => {
+    expect((await createApp().request("/api/auth/ok", {}, {})).status).toBe(404);
+    const response = await createApp().request("/api/test-access/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ password: "not-configured" }),
+    }, {});
     expect(response.status).toBe(503);
   });
 });

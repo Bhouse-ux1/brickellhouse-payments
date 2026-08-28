@@ -38,6 +38,8 @@ function Shell({ children, employeeName }: { children: ReactNode; employeeName: 
 
 function NewTransaction() {
   const preview = import.meta.env.DEV && new URLSearchParams(window.location.search).get("preview") === "1";
+  const [activeTransactionId, setActiveTransactionId] = useState<string | null>(() => preview ? null : sessionStorage.getItem("bh_active_transaction"));
+  const [hydratedTransactionId, setHydratedTransactionId] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<readonly CatalogProduct[]>(() => preview ? previewCatalog : []);
   const [catalogState, setCatalogState] = useState<"loading" | "ready" | "error">(() => preview ? "ready" : "loading");
   const [quantities, setQuantities] = useState<Record<string, number>>({});
@@ -66,6 +68,48 @@ function NewTransaction() {
     return () => controller.abort();
   }, [preview]);
 
+  useEffect(() => {
+    if (preview || !activeTransactionId) return;
+    let stopped = false;
+    async function refreshPayment() {
+      try {
+        const response = await fetch(`/api/transactions/${activeTransactionId}`);
+        if (!response.ok) return;
+        const data = await response.json() as {
+          transaction: { unitNumber: string; customerEmail: string };
+          items: Array<{ productId: string | null; productNameSnapshot: string; unitPriceCentsSnapshot: number; quantity: number }>;
+          payment: { status: string; displayStatus: string };
+        };
+        if (stopped) return;
+        setNotice(data.payment.displayStatus);
+        if (hydratedTransactionId !== activeTransactionId) {
+          setUnit(data.transaction.unitNumber);
+          setEmail(data.transaction.customerEmail);
+          setQuantities(Object.fromEntries(data.items.filter((item) => item.productId).map((item) => [item.productId!, item.quantity])));
+          const customItem = data.items.find((item) => !item.productId);
+          setCustom(customItem ? { description: customItem.productNameSnapshot, amountCents: customItem.unitPriceCentsSnapshot * customItem.quantity } : null);
+          setHydratedTransactionId(activeTransactionId);
+        }
+        if (["PAID", "CANCELED"].includes(data.payment.status)) {
+          sessionStorage.removeItem("bh_active_transaction");
+          setActiveTransactionId(null);
+          setHydratedTransactionId(null);
+          if (data.payment.status === "PAID") {
+            setUnit("");
+            setEmail("");
+            setQuantities({});
+            setCustom(null);
+          }
+        }
+      } catch {
+        if (!stopped) setNotice("Payment status is temporarily unavailable. Do not start another charge.");
+      }
+    }
+    void refreshPayment();
+    const timer = window.setInterval(() => void refreshPayment(), 2500);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [activeTransactionId, hydratedTransactionId, preview]);
+
   const products = useMemo(() => catalog.filter((p) =>
     (category === "All" || p.category === category) && p.displayName.toLowerCase().includes(search.toLowerCase())), [catalog, category, search]);
   const subtotal = catalog.reduce((sum, p) => sum + p.priceCents * (quantities[p.id] ?? 0), custom?.amountCents ?? 0);
@@ -76,6 +120,7 @@ function NewTransaction() {
   const canCharge = Boolean(unit.trim() && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && (selected.length || custom));
 
   function change(product: CatalogProduct, delta: number) {
+    if (activeTransactionId) return;
     setNotice("");
     setQuantities((current) => {
       const next = product.quantityAllowed ? Math.max(0, (current[product.id] ?? 0) + delta) : delta > 0 ? 1 : 0;
@@ -94,21 +139,28 @@ function NewTransaction() {
     setCharging(true);
     setNotice("Preparing the transaction…");
     try {
-      const response = await fetch("/api/transactions", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          unitNumber: unit.trim(),
-          customerEmail: email.trim(),
-          items: selected.map((product) => ({ productId: product.id, quantity: quantities[product.id] })),
-          customCharges: custom ? [custom] : [],
-        }),
-      });
-      if (response.status === 401) { setNotice("Your session has ended. Sign in and try again."); return; }
-      if (!response.ok) { setNotice("This transaction could not be prepared. Please try again."); return; }
-      const data = await response.json() as { transaction: { id: string } };
-      const terminal = await fetch(`/api/transactions/${data.transaction.id}/payment-attempts`, { method: "POST" });
-      setNotice(terminal.ok ? "Connecting to terminal…" : "Terminal unavailable. The transaction was saved for recovery.");
+      let transactionId = activeTransactionId;
+      if (!transactionId) {
+        const response = await fetch("/api/transactions", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            unitNumber: unit.trim(),
+            customerEmail: email.trim(),
+            items: selected.map((product) => ({ productId: product.id, quantity: quantities[product.id] })),
+            customCharges: custom ? [custom] : [],
+          }),
+        });
+        if (response.status === 401) { setNotice("Your session has ended. Sign in and try again."); return; }
+        if (!response.ok) { setNotice("This transaction could not be prepared. Please try again."); return; }
+        const data = await response.json() as { transaction: { id: string } };
+        transactionId = data.transaction.id;
+        sessionStorage.setItem("bh_active_transaction", transactionId);
+        setActiveTransactionId(transactionId);
+      }
+      const terminal = await fetch(`/api/transactions/${transactionId}/payment-attempts`, { method: "POST" });
+      const terminalData = await terminal.json() as { displayStatus?: string; error?: string };
+      setNotice(terminalData.displayStatus ?? terminalData.error ?? "Payment status is being checked. Do not start another charge.");
     } catch {
       setNotice("The service is temporarily unavailable. No payment request was sent.");
     } finally {
@@ -117,25 +169,25 @@ function NewTransaction() {
   }
 
   return <>
-    <header className="pageHeader"><div><span>Payments</span><h1>New Transaction</h1><p>Prepare a resident payment for the front desk terminal.</p></div><span className="statusDot">Terminal setup pending</span></header>
+    <header className="pageHeader"><div><span>Payments</span><h1>New Transaction</h1><p>Prepare a resident payment for the front desk terminal.</p></div><span className="statusDot live">Physical S710 · Live mode</span></header>
     <div className="workspace">
       <section className="flow">
         <div className="residentStrip">
           <div className="step"><i>1</i><div><span>Resident</span><small>Who is being charged?</small></div></div>
-          <label><span>Unit number</span><input value={unit} onChange={(e) => setUnit(e.target.value)} placeholder="2305" /></label>
-          <label className="email"><span>Resident email</span><input value={email} onChange={(e) => setEmail(e.target.value)} type="email" placeholder="resident@example.com" /></label>
+          <label><span>Unit number</span><input value={unit} disabled={Boolean(activeTransactionId)} onChange={(e) => setUnit(e.target.value)} placeholder="2305" /></label>
+          <label className="email"><span>Resident email</span><input value={email} disabled={Boolean(activeTransactionId)} onChange={(e) => setEmail(e.target.value)} type="email" placeholder="resident@example.com" /></label>
         </div>
         <div className="sectionHead"><div><span>2 · Add charges</span><h2>Products & services</h2></div><label className="search"><Search size={15}/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search products"/></label></div>
         <div className="filters">{["All", "Access", "Keys", "Maintenance", "Valet"].map((c) => <button key={c} className={category === c ? "active" : ""} onClick={() => setCategory(c)}>{c}</button>)}</div>
         <div className="custom">
           <div className="customTitle"><Wrench size={18}/><div><span>Custom Charge</span><small>For an item not listed</small></div></div>
-          <label><span>Description</span><input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Describe the charge"/></label>
-          <label className="amount"><span>Amount</span><div><i>$</i><input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" placeholder="0.00"/></div></label>
-          <button disabled={!amountCents || description.trim().length < 2} onClick={() => { if (amountCents) { setCustom({ description: description.trim(), amountCents }); setDescription(""); setAmount(""); } }}><Plus size={15}/>Add</button>
+          <label><span>Description</span><input value={description} disabled={Boolean(activeTransactionId)} onChange={(e) => setDescription(e.target.value)} placeholder="Describe the charge"/></label>
+          <label className="amount"><span>Amount</span><div><i>$</i><input value={amount} disabled={Boolean(activeTransactionId)} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" placeholder="0.00"/></div></label>
+          <button disabled={Boolean(activeTransactionId) || !amountCents || description.trim().length < 2} onClick={() => { if (amountCents) { setCustom({ description: description.trim(), amountCents }); setDescription(""); setAmount(""); } }}><Plus size={15}/>Add</button>
         </div>
         {catalogState === "loading" && <div className="notice" role="status">Loading the trusted product catalog…</div>}
         {catalogState === "error" && <div className="notice" role="alert">The product catalog is temporarily unavailable.</div>}
-        <div className="products">{products.map((product) => { const Icon = icons[product.id] ?? Wrench; const qty = quantities[product.id] ?? 0; return <button key={product.id} className={qty ? "product selected" : "product"} onClick={() => change(product, 1)}>
+        <div className="products">{products.map((product) => { const Icon = icons[product.id] ?? Wrench; const qty = quantities[product.id] ?? 0; return <button key={product.id} disabled={Boolean(activeTransactionId)} className={qty ? "product selected" : "product"} onClick={() => change(product, 1)}>
           <span className="productIcon"><Icon size={20} strokeWidth={1.7}/></span><span className="productCopy"><small>{product.category}</small><strong>{product.displayName}</strong><b>{money.format(product.priceCents / 100)}</b></span><span className="addMark">{qty || <Plus size={14}/>}</span>
         </button>; })}</div>
       </section>
@@ -144,12 +196,21 @@ function NewTransaction() {
         {(unit || email) && <div className="residentMini"><Building2 size={16}/><div><strong>{unit ? `Unit ${unit}` : "Unit pending"}</strong><small>{email || "Email pending"}</small></div></div>}
         <div className={selected.length || custom ? "lines" : "lines empty"}>
           {!selected.length && !custom && <div className="emptyState"><ReceiptText size={23}/><strong>No charges yet</strong><span>Select a product or add a custom charge.</span></div>}
-          {selected.map((p) => <div className="line" key={p.id}><div><strong>{p.displayName}</strong><b>{money.format(p.priceCents * quantities[p.id] / 100)}</b></div><div className="lineBottom"><span className="qty"><button onClick={() => change(p, -1)}><Minus size={12}/></button><i>{quantities[p.id]}</i><button disabled={!p.quantityAllowed} onClick={() => change(p, 1)}><Plus size={12}/></button></span><button className="remove" onClick={() => change(p, -99)}>Remove</button></div></div>)}
-          {custom && <div className="line customLine"><div><span><small>Custom charge</small><strong>{custom.description}</strong></span><b>{money.format(custom.amountCents / 100)}</b></div><button className="remove" onClick={() => setCustom(null)}><X size={11}/>Remove</button></div>}
+          {selected.map((p) => <div className="line" key={p.id}><div><strong>{p.displayName}</strong><b>{money.format(p.priceCents * quantities[p.id] / 100)}</b></div><div className="lineBottom"><span className="qty"><button disabled={Boolean(activeTransactionId)} onClick={() => change(p, -1)}><Minus size={12}/></button><i>{quantities[p.id]}</i><button disabled={Boolean(activeTransactionId) || !p.quantityAllowed} onClick={() => change(p, 1)}><Plus size={12}/></button></span><button className="remove" disabled={Boolean(activeTransactionId)} onClick={() => change(p, -99)}>Remove</button></div></div>)}
+          {custom && <div className="line customLine"><div><span><small>Custom charge</small><strong>{custom.description}</strong></span><b>{money.format(custom.amountCents / 100)}</b></div><button className="remove" disabled={Boolean(activeTransactionId)} onClick={() => setCustom(null)}><X size={11}/>Remove</button></div>}
         </div>
         <div className="totals"><div><span>Subtotal</span><b>{money.format(subtotal / 100)}</b></div><div><span>Processing fee</span><b>{money.format(fee / 100)}</b></div><div className="grand"><span>Total</span><b>{money.format(total / 100)}</b></div></div>
         {notice && <div className="notice" role="status">{notice}</div>}
         <button className="charge" disabled={!canCharge || charging} onClick={prepareCharge}><CreditCard size={17}/>{charging ? "Preparing…" : total ? `Charge ${money.format(total / 100)}` : "Charge"}</button>
+        {activeTransactionId && <button className="cancelPayment" disabled={charging} onClick={async () => {
+          setCharging(true);
+          try {
+            const response = await fetch(`/api/transactions/${activeTransactionId}/payment-attempts/cancel`, { method: "POST" });
+            const data = await response.json() as { displayStatus?: string; error?: string };
+            setNotice(data.displayStatus ?? data.error ?? "Payment status is being checked.");
+            if (response.ok) { sessionStorage.removeItem("bh_active_transaction"); setActiveTransactionId(null); }
+          } finally { setCharging(false); }
+        }}>Cancel terminal payment</button>}
         {!canCharge && <p className="hint">Enter resident details and add a charge to continue.</p>}
       </aside>
     </div>
@@ -173,14 +234,20 @@ function AccountingPage() {
 
 function SignInPage() {
   const [message, setMessage] = useState("");
+  const [password, setPassword] = useState("");
+  const [working, setWorking] = useState(false);
   async function signIn() {
     setMessage("");
-    const response = await fetch("/api/auth/sign-in/social", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: "microsoft", callbackURL: "/" }) });
-    if (!response.ok) { setMessage("Employee sign-in has not been configured yet."); return; }
-    const data = await response.json() as { url?: string };
-    if (data.url) window.location.assign(data.url);
+    setWorking(true);
+    try {
+      const response = await fetch("/api/test-access/login", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }),
+      });
+      if (!response.ok) { setMessage(response.status === 401 ? "The access password is incorrect." : "Temporary access is not configured."); return; }
+      window.location.assign("/");
+    } finally { setWorking(false); }
   }
-  return <div className="signInPage"><div className="signInPanel"><div className="signInBrand"><span>BH</span><div>BrickellHouse<small>Management</small></div></div><span className="signInKicker">Payments</span><h1>Employee sign in</h1><p>Use your authorized BrickellHouse Microsoft account to continue.</p><button onClick={signIn}>Continue with Microsoft</button>{message && <div role="status">{message}</div>}</div></div>;
+  return <div className="signInPage"><form className="signInPanel" onSubmit={(event) => { event.preventDefault(); void signIn(); }}><div className="signInBrand"><span>BH</span><div>BrickellHouse<small>Management</small></div></div><span className="signInKicker">Temporary controlled access</span><h1>Payment testing access</h1><p>This temporary gate protects the live payment interface until final employee authentication is implemented.</p><label className="accessPassword"><span>Access password</span><input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} autoFocus /></label><button type="submit" disabled={!password || working}>{working ? "Checking…" : "Continue"}</button>{message && <div role="status">{message}</div>}</form></div>;
 }
 
 function Application({ employeeName }: { employeeName: string }) {

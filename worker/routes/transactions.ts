@@ -2,9 +2,11 @@ import { desc, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { ZodError } from "zod";
 import { createDatabase } from "@/db/client";
-import { transactionItems, transactions } from "@/db/schema";
+import { paymentAttempts, transactionItems, transactions } from "@/db/schema";
+import { employeePaymentStatus } from "@/domain/payments/status-display";
 import { createDraftTransaction } from "@/services/transactions/create-draft";
 import { requireEmployee } from "@worker/middleware/require-employee";
+import { cancelTerminalPayment, startTerminalPayment, TerminalFlowError } from "@worker/services/terminal-payment";
 import type { WorkerEnvironment } from "@worker/types";
 
 export const transactionRoutes = new Hono<WorkerEnvironment>();
@@ -22,13 +24,44 @@ transactionRoutes.get("/", async (c) => {
   return c.json({ transactions: rows });
 });
 
+transactionRoutes.get("/export.csv", (c) => {
+  return c.json({ error: "CSV export is not enabled" }, 501);
+});
+
 transactionRoutes.get("/:id", async (c) => {
   const db = createDatabase(c.env);
   if (!db) return c.json({ error: "Transaction details are not configured" }, 503);
-  const [transaction] = await db.select().from(transactions).where(eq(transactions.id, c.req.param("id"))).limit(1);
+  const [transaction] = await db.select({
+    id: transactions.id,
+    number: transactions.number,
+    unitNumber: transactions.unitNumber,
+    customerEmail: transactions.customerEmail,
+    subtotalCents: transactions.subtotalCents,
+    processingFeeCents: transactions.processingFeeCents,
+    totalCents: transactions.totalCents,
+    paymentStatus: transactions.paymentStatus,
+    paymentMethod: transactions.paymentMethod,
+    paidAt: transactions.paidAt,
+    cardBrand: transactions.cardBrand,
+    cardLastFour: transactions.cardLastFour,
+    createdAt: transactions.createdAt,
+    updatedAt: transactions.updatedAt,
+  }).from(transactions).where(eq(transactions.id, c.req.param("id"))).limit(1);
   if (!transaction) return c.json({ error: "Transaction not found" }, 404);
   const items = await db.select().from(transactionItems).where(eq(transactionItems.transactionId, transaction.id));
-  return c.json({ transaction, items });
+  const [paymentAttempt] = await db.select({
+    status: paymentAttempts.status,
+    lastErrorCode: paymentAttempts.lastErrorCode,
+  }).from(paymentAttempts).where(eq(paymentAttempts.transactionId, transaction.id))
+    .orderBy(desc(paymentAttempts.attemptNumber)).limit(1);
+  return c.json({
+    transaction, items,
+    payment: {
+      status: transaction.paymentStatus,
+      displayStatus: employeePaymentStatus[transaction.paymentStatus],
+      recoverable: Boolean(paymentAttempt && !["SUCCEEDED", "CANCELED", "EXPIRED"].includes(paymentAttempt.status)),
+    },
+  });
 });
 
 transactionRoutes.post("/", async (c) => {
@@ -44,10 +77,23 @@ transactionRoutes.post("/", async (c) => {
 });
 
 transactionRoutes.post("/:id/payment-attempts", async (c) => {
-  void c.req.param("id");
-  return c.json({ error: "Terminal payments are not enabled" }, 501);
+  const db = createDatabase(c.env);
+  if (!db) return c.json({ error: "Terminal payment storage is not configured" }, 503);
+  try {
+    return c.json(await startTerminalPayment({ db, env: c.env, transactionId: c.req.param("id") }));
+  } catch (error) {
+    if (error instanceof TerminalFlowError) return c.json({ error: error.message, code: error.code }, error.status);
+    throw error;
+  }
 });
 
-transactionRoutes.get("/export.csv", (c) => {
-  return c.json({ error: "CSV export is not enabled" }, 501);
+transactionRoutes.post("/:id/payment-attempts/cancel", async (c) => {
+  const db = createDatabase(c.env);
+  if (!db) return c.json({ error: "Terminal payment storage is not configured" }, 503);
+  try {
+    return c.json(await cancelTerminalPayment({ db, env: c.env, transactionId: c.req.param("id") }));
+  } catch (error) {
+    if (error instanceof TerminalFlowError) return c.json({ error: error.message, code: error.code }, error.status);
+    throw error;
+  }
 });
