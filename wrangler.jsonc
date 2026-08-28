@@ -7,7 +7,11 @@
   "assets": {
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*"]
-  }
-  // Add production Hyperdrive only after it is provisioned:
-  // "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "<hyperdrive-id>" }]
+  },
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "77d4ce39720040aa92f64191d381d6de"
+    }
+  ]
 }
