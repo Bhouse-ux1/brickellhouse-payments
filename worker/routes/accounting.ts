@@ -8,7 +8,7 @@ export const accountingRoutes = new Hono<WorkerEnvironment>();
 accountingRoutes.use("/*", requireEmployee);
 accountingRoutes.get("/summary", async (c) => {
   const employee = c.get("employee");
-  if (!(["ADMIN", "MANAGER", "ACCOUNTING"] as const).includes(employee.role as "ADMIN" | "MANAGER" | "ACCOUNTING")) {
+  if (employee.role !== "ADMIN") {
     return c.json({ error: "Accounting access required" }, 403);
   }
   const db = createDatabase(c.env);

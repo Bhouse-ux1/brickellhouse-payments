@@ -16,7 +16,7 @@ import {
   varchar,
 } from "drizzle-orm/pg-core";
 
-export const userRoleEnum = pgEnum("user_role", ["ADMIN", "MANAGER", "EMPLOYEE", "ACCOUNTING"]);
+export const userRoleEnum = pgEnum("user_role", ["ADMIN", "STAFF", "MANAGER", "EMPLOYEE", "ACCOUNTING"]);
 export const paymentStatusEnum = pgEnum("payment_status", [
   "DRAFT", "READY", "SENDING_TO_TERMINAL", "WAITING_FOR_CUSTOMER", "PROCESSING",
   "PAID", "FAILED", "CANCELED", "TERMINAL_BUSY", "TERMINAL_OFFLINE",
@@ -35,8 +35,13 @@ export const users = pgTable("users", {
   email: text("email").notNull().unique(),
   emailVerified: boolean("email_verified").notNull().default(false),
   image: text("image"),
+  // Keep the legacy database default fail-closed. Better Auth/admin creation
+  // always supplies the approved ADMIN or STAFF role explicitly.
   role: userRoleEnum("role").notNull().default("EMPLOYEE"),
   active: boolean("active").notNull().default(true),
+  banned: boolean("banned").notNull().default(false),
+  banReason: text("ban_reason"),
+  banExpires: timestamp("ban_expires", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -48,6 +53,7 @@ export const sessions = pgTable("sessions", {
   ipAddress: text("ip_address"),
   userAgent: text("user_agent"),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  impersonatedBy: text("impersonated_by"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [index("sessions_user_id_idx").on(table.userId)]);
@@ -79,6 +85,13 @@ export const verifications = pgTable("verifications", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 }, (table) => [uniqueIndex("verifications_identifier_value_uidx").on(table.identifier, table.value)]);
+
+export const rateLimits = pgTable("rate_limits", {
+  id: text("id").primaryKey(),
+  key: text("key").notNull().unique(),
+  count: integer("count").notNull(),
+  lastRequest: bigint("last_request", { mode: "number" }).notNull(),
+});
 
 export const products = pgTable("products", {
   id: varchar("id", { length: 64 }).primaryKey(),
@@ -202,6 +215,7 @@ export const emailDeliveries = pgTable("email_deliveries", {
   status: emailStatusEnum("status").notNull().default("PENDING"),
   providerMessageId: varchar("provider_message_id", { length: 255 }).unique(),
   attemptCount: integer("attempt_count").notNull().default(0),
+  deliveryVersion: integer("delivery_version").notNull().default(1),
   lastError: text("last_error"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   sentAt: timestamp("sent_at", { withTimezone: true }),
@@ -210,6 +224,7 @@ export const emailDeliveries = pgTable("email_deliveries", {
   uniqueIndex("email_deliveries_receipt_once_uidx").on(table.transactionId, table.kind),
   index("email_deliveries_status_idx").on(table.status),
   check("email_deliveries_attempt_nonnegative", sql`${table.attemptCount} >= 0`),
+  check("email_deliveries_version_positive", sql`${table.deliveryVersion} > 0`),
 ]);
 
 export const auditEvents = pgTable("audit_events", {

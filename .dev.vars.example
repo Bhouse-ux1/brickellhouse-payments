@@ -1,9 +1,12 @@
 # Copy to .dev.vars only for local Worker development. Never commit real values.
 ENVIRONMENT=development
 
-# Temporary controlled access. Replace with final employee authentication before production use.
-TEST_ACCESS_PASSWORD=replace-with-a-strong-temporary-password
-TEST_SESSION_SECRET=replace-with-at-least-32-random-characters
+# Production Better Auth. Use a unique random secret of at least 32 characters.
+BETTER_AUTH_SECRET=replace-with-a-unique-random-secret
+BETTER_AUTH_URL=https://brickellhouse-payments.assistantmanager.workers.dev
+
+# Local-only one-time initial administrator bootstrap input.
+INITIAL_ADMIN_EMAIL=
 
 # Optional local PostgreSQL connection. Production uses the HYPERDRIVE binding.
 DATABASE_URL=
@@ -15,6 +18,6 @@ STRIPE_TERMINAL_LOCATION_ID=tml_replace_me
 STRIPE_TERMINAL_WEBHOOK_SECRET=whsec_replace_me
 STRIPE_LIVE_MODE_ONLY=true
 
-# Receipt delivery is intentionally not configured in this phase.
+# Resend server-side delivery. EMAIL_FROM must belong to a verified Resend domain.
 RESEND_API_KEY=
 EMAIL_FROM=

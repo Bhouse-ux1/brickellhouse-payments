@@ -168,7 +168,7 @@ export async function processStripeEvent(input: {
     }
 
     await input.db.update(stripeEvents).set({ processedAt: new Date(), processingError: null }).where(eq(stripeEvents.id, eventRowId));
-    return { received: true, duplicate: false };
+    return { received: true, duplicate: false, paidTransactionId: decision === "SUCCEEDED" ? transaction.id : undefined };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Stripe reconciliation failed";
     await input.db.update(stripeEvents).set({ processingError: message }).where(eq(stripeEvents.id, eventRowId));

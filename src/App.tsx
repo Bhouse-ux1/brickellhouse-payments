@@ -2,13 +2,20 @@ import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from
 import { NavLink, Route, Routes } from "react-router-dom";
 import {
   BellRing, Building2, CarFront, CircleParking, CreditCard, Droplets, KeyRound,
-  CalendarDays, Download, Landmark, Minus, Plus, ReceiptText, Search, ShieldCheck, Thermometer, Wind, Wrench, X,
+  CalendarDays, Download, Landmark, LogOut, Minus, Plus, ReceiptText, Search, ShieldCheck, Thermometer, UserCog, Wind, Wrench, X,
 } from "lucide-react";
 import { calculateProcessingFee } from "@/domain/payments/processing-fee";
 import { productCatalog, type TrustedProduct } from "@/domain/products/catalog";
 import { parseMoneyInput } from "@/domain/transactions/validation";
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+type EmployeeRole = "ADMIN" | "STAFF";
+
+async function authenticatedFetch(input: RequestInfo | URL, init?: RequestInit) {
+  const response = await fetch(input, init);
+  if (response.status === 401) window.dispatchEvent(new Event("bh-auth-expired"));
+  return response;
+}
 type CatalogProduct = Omit<TrustedProduct, "glCode">;
 const previewCatalog: readonly CatalogProduct[] = import.meta.env.DEV
   ? productCatalog
@@ -20,7 +27,7 @@ const icons: Record<string, ComponentType<{ size?: number; strokeWidth?: number 
   smoke_alarm_replacement: BellRing, valet_parking: CarFront,
 };
 
-function Shell({ children, employeeName }: { children: ReactNode; employeeName: string }) {
+function Shell({ children, employeeName, employeeRole, onSignOut }: { children: ReactNode; employeeName: string; employeeRole: EmployeeRole; onSignOut: () => void }) {
   const initials = employeeName.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
   return <div className="shell">
     <aside className="rail">
@@ -28,9 +35,10 @@ function Shell({ children, employeeName }: { children: ReactNode; employeeName: 
       <nav aria-label="Primary">
         <NavLink to="/" end><CreditCard size={17}/><span>New Transaction</span></NavLink>
         <NavLink to="/transactions"><ReceiptText size={17}/><span>Transactions</span></NavLink>
-        <NavLink to="/accounting"><Landmark size={17}/><span>Accounting</span></NavLink>
+        {employeeRole === "ADMIN" && <NavLink to="/accounting"><Landmark size={17}/><span>Accounting</span></NavLink>}
+        {employeeRole === "ADMIN" && <NavLink to="/admin"><UserCog size={17}/><span>Staff Access</span></NavLink>}
       </nav>
-      <div className="employee"><span>{initials}</span><div>{employeeName}<small>Employee</small></div></div>
+      <div className="employee"><span>{initials}</span><div>{employeeName}<small>{employeeRole === "ADMIN" ? "Administrator" : "Staff"}</small></div><button aria-label="Sign out" title="Sign out" onClick={onSignOut}><LogOut size={15}/></button></div>
     </aside>
     <main className="page">{children}</main>
   </div>;
@@ -57,7 +65,7 @@ function NewTransaction() {
   useEffect(() => {
     if (preview) return;
     const controller = new AbortController();
-    void fetch("/api/products", { signal: controller.signal }).then(async (response) => {
+    void authenticatedFetch("/api/products", { signal: controller.signal }).then(async (response) => {
       if (!response.ok) throw new Error("Catalog request failed");
       const data = await response.json() as { products: CatalogProduct[] };
       setCatalog(data.products);
@@ -74,7 +82,7 @@ function NewTransaction() {
     let stopped = false;
     async function refreshPayment() {
       try {
-        const response = await fetch(`/api/transactions/${activeTransactionId}`);
+        const response = await authenticatedFetch(`/api/transactions/${activeTransactionId}`);
         if (!response.ok) return;
         const data = await response.json() as {
           transaction: { unitNumber: string; customerEmail: string };
@@ -144,7 +152,7 @@ function NewTransaction() {
     try {
       let transactionId = activeTransactionId;
       if (!transactionId) {
-        const response = await fetch("/api/transactions", {
+        const response = await authenticatedFetch("/api/transactions", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
@@ -161,7 +169,7 @@ function NewTransaction() {
         sessionStorage.setItem("bh_active_transaction", transactionId);
         setActiveTransactionId(transactionId);
       }
-      const terminal = await fetch(`/api/transactions/${transactionId}/payment-attempts`, { method: "POST" });
+      const terminal = await authenticatedFetch(`/api/transactions/${transactionId}/payment-attempts`, { method: "POST" });
       const terminalData = await terminal.json() as { displayStatus?: string; error?: string; readerDisplayPending?: boolean };
       if (typeof terminalData.readerDisplayPending === "boolean") setReaderDisplayPending(terminalData.readerDisplayPending);
       setNotice(terminalData.displayStatus ?? terminalData.error ?? "Payment status is being checked. Do not start another charge.");
@@ -210,7 +218,7 @@ function NewTransaction() {
           setCharging(true);
           try {
             const action = readerDisplayPending ? "clear-terminal" : "cancel";
-            const response = await fetch(`/api/transactions/${activeTransactionId}/payment-attempts/${action}`, { method: "POST" });
+            const response = await authenticatedFetch(`/api/transactions/${activeTransactionId}/payment-attempts/${action}`, { method: "POST" });
             const data = await response.json() as { displayStatus?: string; error?: string };
             setNotice(data.displayStatus ?? data.error ?? "Payment status is being checked.");
             if (response.ok) { sessionStorage.removeItem("bh_active_transaction"); setActiveTransactionId(null); setReaderDisplayPending(false); }
@@ -225,14 +233,15 @@ function NewTransaction() {
 function TransactionsPage() {
   type HistoryRow = {
     id: string; number: string; unitNumber: string; customerEmail: string; totalCents: number;
-    paymentStatus: string; createdAt: string; lastErrorCode: string | null;
+    paymentStatus: string; createdAt: string; lastErrorCode: string | null; receiptStatus: string | null;
   };
   const [rows, setRows] = useState<HistoryRow[]>([]);
   const [historyState, setHistoryState] = useState<"loading" | "ready" | "error">("loading");
   const [query, setQuery] = useState("");
+  const [receiptMessage, setReceiptMessage] = useState("");
   useEffect(() => {
     const controller = new AbortController();
-    void fetch("/api/transactions", { signal: controller.signal }).then(async (response) => {
+    void authenticatedFetch("/api/transactions", { signal: controller.signal }).then(async (response) => {
       if (!response.ok) throw new Error("History request failed");
       const data = await response.json() as { transactions: HistoryRow[] };
       setRows(data.transactions);
@@ -255,13 +264,14 @@ function TransactionsPage() {
   }
   return <><header className="pageHeader"><div><span>Payments</span><h1>Transactions</h1><p>Find resident payments and review their current status.</p></div><button className="outlineAction" disabled><Download size={14}/>Export CSV</button></header>
     <div className="records"><div className="recordTools"><label className="recordSearch"><Search size={15}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search transaction, unit, or email"/></label><label><span>From</span><input type="date" disabled/></label><label><span>To</span><input type="date" disabled/></label></div>
+      {receiptMessage && <div className="historyNote" role="status">{receiptMessage}</div>}
       {historyState === "ready" && completedCount === 0 && rows.length > 0 && <div className="historyNote">No completed payments yet. Canceled, abandoned, failed, and in-progress attempts are listed below.</div>}
       <div className="recordTable"><div className="recordHead"><span>Transaction</span><span>Date</span><span>Unit</span><span>Resident</span><span>Status</span><span>Total</span></div>
         {historyState === "loading" && <div className="recordEmpty"><ReceiptText size={24}/><strong>Loading payment activity…</strong></div>}
         {historyState === "error" && <div className="recordEmpty"><ReceiptText size={24}/><strong>Payment activity is unavailable</strong><p>Please refresh to try again.</p></div>}
         {historyState === "ready" && rows.length === 0 && <div className="recordEmpty"><ReceiptText size={24}/><strong>No payment activity yet</strong><p>Completed payments and attempts will appear here.</p></div>}
         {historyState === "ready" && rows.length > 0 && visibleRows.length === 0 && <div className="recordEmpty"><Search size={24}/><strong>No matching payment activity</strong><p>Try a different transaction, unit, or email.</p></div>}
-        {historyState === "ready" && visibleRows.map((row) => { const label = historyStatus(row); return <div className="recordRow" key={row.id}><strong>{row.number}</strong><span>{new Date(row.createdAt).toLocaleString()}</span><span>{row.unitNumber}</span><span>{row.customerEmail}</span><span className={`historyStatus ${label.toLowerCase().replaceAll(" ", "-")}`}>{label}</span><b>{money.format(row.totalCents / 100)}</b></div>; })}
+        {historyState === "ready" && visibleRows.map((row) => { const label = historyStatus(row); return <div className="recordRow" key={row.id}><strong>{row.number}</strong><span>{new Date(row.createdAt).toLocaleString()}</span><span>{row.unitNumber}</span><span>{row.customerEmail}</span><span className="historyStateCell"><i className={`historyStatus ${label.toLowerCase().replaceAll(" ", "-")}`}>{label}</i>{row.paymentStatus === "PAID" && <button onClick={async () => { setReceiptMessage("Sending receipt…"); const response = await authenticatedFetch(`/api/transactions/${row.id}/receipt/resend`, { method: "POST" }); setReceiptMessage(response.ok ? "Receipt sent." : "Receipt could not be sent. Verify email configuration and try again."); }}>{row.receiptStatus === "SENT" ? "Resend receipt" : "Send receipt"}</button>}</span><b>{money.format(row.totalCents / 100)}</b></div>; })}
       </div>
     </div></>;
 }
@@ -274,40 +284,102 @@ function AccountingPage() {
     </div></>;
 }
 
+function AdminPage() {
+  type Employee = { id: string; name: string; email: string; role: EmployeeRole; active: boolean; emailVerified: boolean };
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState<EmployeeRole>("STAFF");
+  const [message, setMessage] = useState("");
+  async function loadEmployees() {
+    const response = await authenticatedFetch("/api/admin/users");
+    if (!response.ok) { setMessage("Staff access is unavailable."); return; }
+    const data = await response.json() as { users: Employee[] };
+    setEmployees(data.users);
+  }
+  useEffect(() => {
+    const controller = new AbortController();
+    void authenticatedFetch("/api/admin/users", { signal: controller.signal }).then(async (response) => {
+      if (!response.ok) throw new Error("Staff access request failed");
+      const data = await response.json() as { users: Employee[] };
+      setEmployees(data.users);
+    }).catch((error: unknown) => {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setMessage("Staff access is unavailable.");
+    });
+    return () => controller.abort();
+  }, []);
+  async function createEmployee() {
+    setMessage("Creating employee access…");
+    const response = await authenticatedFetch("/api/admin/users", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name, email, role }),
+    });
+    const body = await response.json() as { error?: string };
+    if (!response.ok) { setMessage(body.error ?? "Employee access could not be created."); return; }
+    setName(""); setEmail(""); setRole("STAFF"); setMessage("Employee created. A secure password setup email was sent.");
+    await loadEmployees();
+  }
+  return <><header className="pageHeader"><div><span>Administration</span><h1>Staff Access</h1><p>Create and manage approved BrickellHouse employee accounts.</p></div></header><div className="adminPage">
+    <section className="adminCreate"><h2>Add employee</h2><p>No public registration is available. The employee receives a secure password setup link.</p><div><label><span>Name</span><input value={name} onChange={(event) => setName(event.target.value)} /></label><label><span>Email</span><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label><label><span>Role</span><select value={role} onChange={(event) => setRole(event.target.value as EmployeeRole)}><option value="STAFF">Staff</option><option value="ADMIN">Admin</option></select></label><button disabled={name.trim().length < 2 || !email.includes("@")} onClick={() => void createEmployee()}>Create access</button></div>{message && <div className="historyNote" role="status">{message}</div>}</section>
+    <section className="adminUsers"><h2>Approved employees</h2>{employees.map((employee) => <div className="adminUser" key={employee.id}><div><strong>{employee.name}</strong><span>{employee.email}</span><small>{employee.emailVerified ? "Email verified" : "Password setup pending"}</small></div><select value={employee.role} onChange={async (event) => { await authenticatedFetch(`/api/admin/users/${employee.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ active: employee.active, role: event.target.value }) }); await loadEmployees(); }}><option value="STAFF">Staff</option><option value="ADMIN">Admin</option></select><button onClick={async () => { await authenticatedFetch(`/api/admin/users/${employee.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ active: !employee.active, role: employee.role }) }); await loadEmployees(); }}>{employee.active ? "Disable" : "Enable"}</button>{!employee.emailVerified && <button onClick={async () => { const response = await authenticatedFetch(`/api/admin/users/${employee.id}/send-password-setup`, { method: "POST" }); setMessage(response.ok ? "Password setup email sent." : "Password setup email could not be sent."); }}>Send setup</button>}</div>)}</section>
+  </div></>;
+}
+
 function SignInPage() {
   const [message, setMessage] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [working, setWorking] = useState(false);
+  const [forgot, setForgot] = useState(false);
   async function signIn() {
     setMessage("");
     setWorking(true);
     try {
-      const response = await fetch("/api/test-access/login", {
-        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }),
+      const response = await fetch("/api/auth/sign-in/email", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: email.trim(), password, rememberMe: false }),
       });
-      if (!response.ok) { setMessage(response.status === 401 ? "The access password is incorrect." : "Temporary access is not configured."); return; }
+      if (!response.ok) { setMessage(response.status === 429 ? "Too many sign-in attempts. Please wait and try again." : "Email or password is incorrect, or this account is not active."); return; }
       window.location.assign("/");
     } finally { setWorking(false); }
   }
-  return <div className="signInPage"><form className="signInPanel" onSubmit={(event) => { event.preventDefault(); void signIn(); }}><div className="signInBrand"><span>BH</span><div>BrickellHouse<small>Management</small></div></div><span className="signInKicker">Temporary controlled access</span><h1>Payment testing access</h1><p>This temporary gate protects the live payment interface until final employee authentication is implemented.</p><label className="accessPassword"><span>Access password</span><input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} autoFocus /></label><button type="submit" disabled={!password || working}>{working ? "Checking…" : "Continue"}</button>{message && <div role="status">{message}</div>}</form></div>;
+  async function requestReset() {
+    setWorking(true);
+    await fetch("/api/auth/request-password-reset", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: email.trim(), redirectTo: `${window.location.origin}/reset-password` }),
+    });
+    setWorking(false); setMessage("If this approved employee account exists, a password reset link has been sent.");
+  }
+  return <div className="signInPage"><form className="signInPanel" onSubmit={(event) => { event.preventDefault(); void (forgot ? requestReset() : signIn()); }}><div className="signInBrand"><span>BH</span><div>BrickellHouse<small>Management</small></div></div><span className="signInKicker">Internal payment management</span><h1>{forgot ? "Reset password" : "Sign in"}</h1><p>{forgot ? "Enter your approved employee email to receive a secure reset link." : "Use your approved BrickellHouse employee account."}</p><label className="accessPassword"><span>Email</span><input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} autoFocus /></label>{!forgot && <label className="accessPassword"><span>Password</span><input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>}<button type="submit" disabled={!email || (!forgot && !password) || working}>{working ? "Please wait…" : forgot ? "Send reset link" : "Sign In"}</button><button className="forgotButton" type="button" onClick={() => { setForgot(!forgot); setMessage(""); }}>{forgot ? "Back to Sign In" : "Forgot Password"}</button>{message && <div role="status">{message}</div>}</form></div>;
 }
 
-function Application({ employeeName }: { employeeName: string }) {
-  return <Shell employeeName={employeeName}><Routes><Route path="/" element={<NewTransaction/>}/><Route path="/transactions" element={<TransactionsPage/>}/><Route path="/accounting" element={<AccountingPage/>}/><Route path="*" element={<NewTransaction/>}/></Routes></Shell>;
+function ResetPasswordPage() {
+  const token = new URLSearchParams(window.location.search).get("token");
+  const [password, setPassword] = useState("");
+  const [message, setMessage] = useState(token ? "" : "This password reset link is invalid or expired.");
+  const [working, setWorking] = useState(false);
+  return <div className="signInPage"><form className="signInPanel" onSubmit={async (event) => { event.preventDefault(); if (!token) return; setWorking(true); const response = await fetch("/api/auth/reset-password", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ newPassword: password, token }) }); setWorking(false); setMessage(response.ok ? "Password set. You can now sign in." : "This password reset link is invalid or expired."); }}><div className="signInBrand"><span>BH</span><div>BrickellHouse<small>Management</small></div></div><span className="signInKicker">Secure employee access</span><h1>Set password</h1><p>Choose at least 12 characters. All existing sessions are revoked when a password is reset.</p><label className="accessPassword"><span>New password</span><input type="password" autoComplete="new-password" minLength={12} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} autoFocus /></label><button type="submit" disabled={!token || password.length < 12 || working}>{working ? "Saving…" : "Set password"}</button><button className="forgotButton" type="button" onClick={() => window.location.assign("/")}>Back to Sign In</button>{message && <div role="status">{message}</div>}</form></div>;
+}
+
+function Application({ employeeName, employeeRole, onSignOut }: { employeeName: string; employeeRole: EmployeeRole; onSignOut: () => void }) {
+  return <Shell employeeName={employeeName} employeeRole={employeeRole} onSignOut={onSignOut}><Routes><Route path="/" element={<NewTransaction/>}/><Route path="/transactions" element={<TransactionsPage/>}/>{employeeRole === "ADMIN" && <Route path="/accounting" element={<AccountingPage/>}/>} {employeeRole === "ADMIN" && <Route path="/admin" element={<AdminPage/>}/>}<Route path="*" element={<NewTransaction/>}/></Routes></Shell>;
 }
 
 export function App() {
   const preview = import.meta.env.DEV && new URLSearchParams(window.location.search).get("preview") === "1";
-  const [session, setSession] = useState<{ state: "checking" | "signed-out" | "signed-in"; name?: string }>(() => preview ? { state: "signed-in", name: "Alex Morgan" } : { state: "checking" });
+  const [session, setSession] = useState<{ state: "checking" | "signed-out" | "signed-in"; name?: string; role?: EmployeeRole }>(() => preview ? { state: "signed-in", name: "Alex Morgan", role: "ADMIN" } : { state: "checking" });
   useEffect(() => {
     if (preview) return;
+    const expired = () => setSession({ state: "signed-out" });
+    window.addEventListener("bh-auth-expired", expired);
     void fetch("/api/session").then(async (response) => {
       if (!response.ok) { setSession({ state: "signed-out" }); return; }
-      const data = await response.json() as { employee: { name: string } };
-      setSession({ state: "signed-in", name: data.employee.name });
+      const data = await response.json() as { employee: { name: string; role: EmployeeRole } };
+      setSession({ state: "signed-in", name: data.employee.name, role: data.employee.role });
     }).catch(() => setSession({ state: "signed-out" }));
+    return () => window.removeEventListener("bh-auth-expired", expired);
   }, [preview]);
+  if (window.location.pathname === "/reset-password") return <ResetPasswordPage/>;
   if (session.state === "checking") return <div className="sessionLoading">Opening BrickellHouse Payments…</div>;
   if (session.state === "signed-out") return <SignInPage/>;
-  return <Application employeeName={session.name ?? "Employee"}/>;
+  return <Application employeeName={session.name ?? "Employee"} employeeRole={session.role ?? "STAFF"} onSignOut={async () => { await fetch("/api/auth/sign-out", { method: "POST" }); setSession({ state: "signed-out" }); }}/>;
 }

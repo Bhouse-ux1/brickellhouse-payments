@@ -1,10 +1,10 @@
-export type EmployeeRole = "ADMIN" | "MANAGER" | "EMPLOYEE" | "ACCOUNTING";
+export type EmployeeRole = "ADMIN" | "STAFF" | "MANAGER" | "EMPLOYEE" | "ACCOUNTING";
 
 export type WorkerBindings = {
   HYPERDRIVE?: Hyperdrive;
   DATABASE_URL?: string;
-  TEST_ACCESS_PASSWORD?: string;
-  TEST_SESSION_SECRET?: string;
+  BETTER_AUTH_SECRET?: string;
+  BETTER_AUTH_URL?: string;
   STRIPE_SECRET_KEY?: string;
   STRIPE_LIVE_MODE_ONLY?: string;
   STRIPE_TERMINAL_READER_ID?: string;

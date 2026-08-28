@@ -2,17 +2,13 @@
 
 Last updated: August 28, 2026
 
-Read `README.md` first. The standalone repository is connected to `Bhouse-ux1/brickellhouse-payments`; Neon is initialized and production database access uses the configured Cloudflare Hyperdrive binding.
+Read `README.md` first. This is the standalone `Bhouse-ux1/brickellhouse-payments` repository.
 
-Current application boundaries:
-
-- Microsoft Entra and Better Auth are removed from the active flow. Existing auth-related database tables remain for future final employee authentication.
-- A temporary testing-only access password is validated inside the Worker and represented by a signed, expiring HttpOnly cookie.
-- Stripe Terminal is implemented with the server-driven REST API for the configured real physical S710.
-- Stripe is live-mode only and fails closed unless the explicit live-only flag, live secret, Reader ID, Location ID, and webhook secret are configured.
-- Deploying or loading the application never starts a payment. Only a manual authenticated `Charge $XX.XX` action can create or resume the stable PaymentIntent and send it to the configured reader.
-- Trusted prices, GL rules, Custom Charge validation, processing fee, and total remain server-authoritative.
-- PostgreSQL owns transaction attempts, PaymentIntent identity, reader locking, webhook deduplication, reconciliation, PAID state, and pending receipt records.
-- Resend and actual email delivery remain disabled.
-
-Before the first live card charge, configure the exact secrets and Stripe identifiers documented in `README.md`, verify the webhook subscriptions, confirm the S710 is online at the configured live Location, and obtain explicit operator authorization.
+- The live Stripe S710 server-driven flow and all existing payment safety controls remain unchanged.
+- Self-hosted Better Auth on Neon replaces the temporary shared-password gate in the pending build. Public signup is disabled; Admin creates Admin/Staff accounts.
+- Production sessions are secure HttpOnly cookies with a 30-minute inactivity timeout. PostgreSQL provides distributed sign-in rate limiting and audit logs.
+- The additive auth/receipt migration is applied. It did not change transaction, item, attempt, Stripe event, product, or session counts.
+- Resend sends authentication messages and receipts only when `RESEND_API_KEY` and a verified `EMAIL_FROM` are configured.
+- A receipt is queued only by independently reconciled PAID state and uses both database uniqueness and a versioned Resend idempotency key.
+- Production deployment must wait until the initial Admin email, verified Resend sender, Resend API key, and Better Auth secret are configured and the bootstrap password-setup email can be received. Do not replace the working production gate with an unbootstrapped auth system.
+- Never initiate a payment, command the S710, or send a real receipt as a configuration test.

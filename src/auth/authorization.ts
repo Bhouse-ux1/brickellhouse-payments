@@ -1,4 +1,4 @@
-export type EmployeeRole = "ADMIN" | "MANAGER" | "EMPLOYEE" | "ACCOUNTING";
+export type EmployeeRole = "ADMIN" | "STAFF";
 
 export type AuthorizationIdentity = { active: boolean; role: EmployeeRole } | null;
 

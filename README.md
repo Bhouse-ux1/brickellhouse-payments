@@ -1,80 +1,95 @@
 # BrickellHouse Payments
 
-BrickellHouse Payments is the standalone employee payment website for the physical Stripe S710 at BrickellHouse. It runs as a React application and Hono API on Cloudflare Workers, uses Neon PostgreSQL through Hyperdrive, and uses Stripe Terminal's server-driven API.
+BrickellHouse Payments is the standalone employee payment website for the physical Stripe S710 at BrickellHouse. React and Hono run on Cloudflare Workers, Neon PostgreSQL is reached through Hyperdrive, Stripe Terminal uses the server-driven API, Better Auth provides employee access, and Resend delivers authentication messages and verified-payment receipts.
 
-## Current safety boundary
+## Production safety boundary
 
-This build is **live-mode only**, but deployment does not initiate a payment. A real card charge can begin only after an authenticated employee manually presses the displayed `Charge $XX.XX` button.
+Deployment and page loads never initiate a payment. A live card charge begins only when an authenticated employee manually presses `Charge $XX.XX`.
 
-- The Worker refuses Stripe initialization unless `STRIPE_LIVE_MODE_ONLY=true` and the approved restricted `STRIPE_SECRET_KEY` begins with `rk_live_`.
-- Test keys and non-live Stripe objects are rejected.
-- Reader and Location IDs come only from Worker configuration; the browser cannot choose them.
-- The browser submits product IDs, quantities, resident details, and validated Custom Charge inputs only.
-- PostgreSQL products and immutable transaction snapshots determine prices and GL codes.
-- The authoritative fee is `round(subtotalCents * 29 / 1000) + 30`; zero subtotal has zero fee.
+- The Worker accepts only the approved live restricted Stripe key format and rejects test-mode objects.
+- Reader and Location IDs are server configuration; the browser cannot choose them.
+- PostgreSQL products and immutable transaction snapshots determine prices, GL codes, and totals in integer cents.
+- The authoritative fee is `round(subtotalCents * 29 / 1000) + 30`; a zero subtotal has no fee.
 - Standard products and Custom Charge use GL `40090`; only Valet Parking uses `40033`.
-- Stripe receives exactly the database-backed authoritative total in integer cents.
-- One durable payment attempt maps to one PaymentIntent and stable Stripe idempotency keys.
-- PostgreSQL reader locking prevents two BrickellHouse transactions from using the S710 simultaneously.
-- A transaction becomes PAID only after server-side Stripe retrieval and exact identity, amount, USD, live-mode, transaction, reader, location, and success verification.
-- Only safe card-present results may be stored: Stripe IDs, brand, last four, reader/location, and payment time.
+- Stable idempotency keys, PostgreSQL reader locking, signed-webhook deduplication, exact amount reconciliation, and refresh recovery remain authoritative.
+- A transaction becomes PAID only after independent live Stripe retrieval and exact identity, amount, USD, reader, location, and success checks.
 
-## Temporary access gate
+## Employee authentication
 
-Microsoft Entra is disabled in the active application flow. The existing user/session/account tables remain for future production authentication.
+Authentication is self-hosted Better Auth using the existing Neon/Drizzle user, account, session, and verification tables. Managed Neon Auth was not selected because it is not a drop-in replacement for this existing Better Auth schema and would introduce a second authentication system without the custom server controls required here.
 
-The current login is a **temporary testing-only control**, not the final employee authentication system. It validates `TEST_ACCESS_PASSWORD` inside the Worker and issues an expiring, signed `Secure`, `HttpOnly`, `SameSite=Strict` cookie using `TEST_SESSION_SECRET`. Neither secret is present in browser code or repository configuration. Replace this gate with final employee authentication before regular production operation.
+- Email and password only; public signup is disabled.
+- Accounts must be created by an Admin. Roles are `ADMIN` and `STAFF`.
+- New accounts receive a one-hour password-setup link and remain unverified until password setup completes.
+- Passwords are salted one-way hashes managed by Better Auth; plaintext passwords are never stored.
+- Sessions use `Secure`, `HttpOnly`, `SameSite=Strict` cookies in production and expire after 30 minutes of inactivity. Session refresh does not alter Stripe or PostgreSQL payment reconciliation state.
+- Sign-in is limited to five attempts per five minutes using the PostgreSQL `rate_limits` table, so enforcement is shared across Worker isolates.
+- Products, transactions, terminal actions, and receipt resend require an active verified employee. Accounting and staff administration require Admin.
+- Login, logout, password-reset, email-delivery, and employee-administration events are stored in `audit_events` without passwords or credentials.
 
-## Required Cloudflare configuration
+The temporary `TEST_ACCESS_PASSWORD` / `TEST_SESSION_SECRET` code and bindings are removed. Those two Cloudflare secrets can be deleted only after this production authentication build is deployed and the first Admin login is verified.
 
-Keep the existing `HYPERDRIVE` binding. `STRIPE_LIVE_MODE_ONLY=true` is committed as non-secret Worker configuration. Add the remaining values with Cloudflare secret management; never commit real values:
+### First Admin bootstrap
+
+Keep the values below only in the ignored local `.env`; never commit them:
 
 ```text
-TEST_ACCESS_PASSWORD
-TEST_SESSION_SECRET
+DATABASE_URL=<direct neondb_owner connection used only for migration/bootstrap>
+BETTER_AUTH_SECRET=<at least 32 random bytes; same value as the Worker secret>
+BETTER_AUTH_URL=https://brickellhouse-payments.assistantmanager.workers.dev
+RESEND_API_KEY=<server-side Resend key>
+EMAIL_FROM=<verified sender address, for example payments@a-verified-domain.example>
+INITIAL_ADMIN_EMAIL=<approved BrickellHouse administrator>
+```
+
+After the sender is verified and Worker secrets are configured, run once:
+
+```bash
+npm run auth:bootstrap-admin
+```
+
+The command creates one Admin with a random inaccessible bootstrap password and requests a secure password-setup email. It refuses to overwrite an existing account.
+
+## Verified-payment receipts
+
+Successful Stripe reconciliation atomically marks the trusted transaction PAID and inserts one `RESIDENT_RECEIPT` delivery row. Only that PAID row can be delivered. Webhook retries, browser refreshes, and Worker retries cannot create a second base delivery because `(transaction_id, kind)` is unique; Resend also receives the stable idempotency key `receipt/<transaction-id>/v<delivery-version>`.
+
+The responsive receipt renders only trusted stored snapshots: transaction reference and payment time, item name, quantity, unit and line amounts, processing fee, exact total, and optional card brand/last four. It excludes GL codes and all Stripe, webhook, reader, and database IDs. Email failure never changes PAID status. An authenticated employee can retry a failed receipt or explicitly resend a sent receipt; an intentional resend increments the delivery version.
+
+Receipt/authentication email delivery requires these Worker secrets:
+
+```text
+RESEND_API_KEY
+EMAIL_FROM
+```
+
+`EMAIL_FROM` must be a single verified sender email address on a Resend-verified domain. The browser never receives either value. No implementation test sends a real email.
+
+## Cloudflare configuration
+
+Committed non-secret configuration includes `STRIPE_LIVE_MODE_ONLY=true`, `BETTER_AUTH_URL`, and the existing `HYPERDRIVE` binding. Configure these with `wrangler secret put`; do not commit values:
+
+```text
+BETTER_AUTH_SECRET
+RESEND_API_KEY
+EMAIL_FROM
 STRIPE_SECRET_KEY
 STRIPE_TERMINAL_READER_ID
 STRIPE_TERMINAL_LOCATION_ID
 STRIPE_TERMINAL_WEBHOOK_SECRET
 ```
 
-`STRIPE_TERMINAL_READER_ID` must identify the real registered S710 and `STRIPE_TERMINAL_LOCATION_ID` must be that reader's actual live Stripe Location. Configure the Stripe webhook URL as:
+The Stripe webhook remains `/api/webhooks/stripe` with the existing live event subscriptions. No Stripe credential, endpoint, S710 setting, Hyperdrive configuration, or payment data is changed by the authentication/receipt phase.
 
-```text
-https://<worker-host>/api/webhooks/stripe
-```
-
-Subscribe it to `terminal.reader.action_succeeded`, `terminal.reader.action_failed`, `payment_intent.succeeded`, and `payment_intent.payment_failed`. `terminal.reader.action_updated` is also accepted.
-
-## Payment and recovery flow
-
-1. The employee passes the temporary access gate.
-2. The Worker creates the trusted database transaction and one payment attempt.
-3. The Worker reserves the configured physical S710 in PostgreSQL and displays the exact trusted cart. No PaymentIntent exists at this review stage.
-4. The employee either starts card payment or uses **Clear Terminal**. Starting payment clears the cart display, creates or retrieves the same live card-present PaymentIntent, and calls `process_payment_intent`.
-5. A scheduled two-minute inactivity check reconciles Stripe and PostgreSQL before clearing an abandoned display. It never clears a PaymentIntent or payment reader action.
-6. Browser refresh restores the active database transaction; duplicate clicks resume rather than creating another PaymentIntent.
-7. Signed Stripe webhooks are stored by event ID and reconciled idempotently.
-8. Successful reconciliation marks the transaction PAID and creates one pending receipt-delivery record. No email is sent because Resend remains disabled.
-
-If Stripe or reader state is uncertain after a timeout, the application retains the attempt and lock for reconciliation. It does not create a replacement PaymentIntent automatically.
-
-## Local development and validation
+## Local validation
 
 ```bash
 npm install
-npm run dev
 npm run typecheck
 npm run lint
 npm test
 npm run build
-npm run worker:build
+npx wrangler deploy --dry-run
 ```
 
-Copy `.dev.vars.example` to `.dev.vars` only for local Worker development. `.dev.vars`, `.env`, build output, and Wrangler state are ignored. `DATABASE_URL` is local migration administration only; production database access uses `env.HYPERDRIVE.connectionString`.
-
-## Deferred work
-
-- Replace the temporary access password with final employee authentication.
-- Configure Resend and receipt delivery only in a separately approved phase.
-- Complete the first live physical card charge only under explicit operator instruction and supervision.
+`.env`, `.dev.vars`, `dist`, Wrangler state, and local build output are ignored. Production database access uses `env.HYPERDRIVE.connectionString`; the direct owner URL is for local migration/bootstrap only.

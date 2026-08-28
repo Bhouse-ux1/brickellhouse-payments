@@ -9,7 +9,8 @@
     "run_worker_first": ["/api/*"]
   },
   "vars": {
-    "STRIPE_LIVE_MODE_ONLY": "true"
+    "STRIPE_LIVE_MODE_ONLY": "true",
+    "BETTER_AUTH_URL": "https://brickellhouse-payments.assistantmanager.workers.dev"
   },
   "triggers": {
     "crons": ["* * * * *"]

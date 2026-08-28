@@ -8,6 +8,13 @@
       "when": 1787847361433,
       "tag": "0000_breezy_jazinda",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1787943545097,
+      "tag": "0001_stale_mockingbird",
+      "breakpoints": true
     }
   ]
 }

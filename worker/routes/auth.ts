@@ -1,11 +1,10 @@
+import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { createDatabase } from "@/db/client";
 import { users } from "@/db/schema";
 import { readAuthorizedEmployee } from "@worker/auth";
-import {
-  TEST_EMPLOYEE, clearTestAccessCookie, createTestAccessCookie,
-  testAccessConfigured, verifyTestAccessPassword,
-} from "@worker/services/test-access";
+import { emailFingerprint, recordAuthAudit, requestAuditContext } from "@worker/services/auth-audit";
+import { createProductionAuth, productionAuthConfigured } from "@worker/services/production-auth";
 import type { WorkerEnvironment } from "@worker/types";
 
 export const authRoutes = new Hono<WorkerEnvironment>();
@@ -15,23 +14,46 @@ authRoutes.get("/session", async (c) => {
   return employee ? c.json({ employee }) : c.json({ error: "Authentication required" }, 401);
 });
 
-authRoutes.post("/test-access/login", async (c) => {
-  if (!testAccessConfigured(c.env)) return c.json({ error: "Test access is not configured" }, 503);
-  const body: { password?: unknown } = await c.req.json<{ password?: unknown }>().catch(() => ({}));
-  if (typeof body.password !== "string" || body.password.length > 512 || !(await verifyTestAccessPassword(body.password, c.env))) {
-    return c.json({ error: "Invalid access password" }, 401);
+export async function handleProductionAuthRequest(request: Request, env: WorkerEnvironment["Bindings"]): Promise<Response> {
+  if (!productionAuthConfigured(env)) return Response.json({ error: "Production authentication is not configured" }, { status: 503 });
+  const db = createDatabase(env);
+  if (!db) return Response.json({ error: "Authentication database is not configured" }, { status: 503 });
+  const url = new URL(request.url);
+  const authPath = url.pathname.slice("/api/auth".length) || "/";
+  const requestCopy = request.clone();
+  const currentEmployee = authPath === "/sign-out" ? await readAuthorizedEmployee(request, env) : null;
+  let email = "";
+  if (["/sign-in/email", "/request-password-reset"].includes(authPath)) {
+    const body = await requestCopy.json().catch(() => ({})) as { email?: unknown };
+    if (typeof body.email === "string") email = body.email.trim().toLowerCase();
   }
-  const db = createDatabase(c.env);
-  if (!db) return c.json({ error: "Test access database is not configured" }, 503);
-  await db.insert(users).values({
-    id: TEST_EMPLOYEE.id, name: TEST_EMPLOYEE.name, email: TEST_EMPLOYEE.email,
-    role: TEST_EMPLOYEE.role, active: true, emailVerified: false,
-  }).onConflictDoUpdate({ target: users.id, set: { name: TEST_EMPLOYEE.name, active: true, updatedAt: new Date() } });
-  c.header("set-cookie", await createTestAccessCookie(c.env));
-  return c.json({ employee: TEST_EMPLOYEE });
-});
-
-authRoutes.post("/test-access/logout", (c) => {
-  c.header("set-cookie", clearTestAccessCookie());
-  return c.json({ ok: true });
-});
+  const response = await createProductionAuth(env).handler(request);
+  const context = requestAuditContext(request);
+  if (authPath === "/sign-in/email") {
+    const fingerprint = email ? await emailFingerprint(email) : "invalid-email";
+    const [user] = email ? await db.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1) : [];
+    await recordAuthAudit({
+      db,
+      action: response.ok ? "LOGIN_SUCCEEDED" : response.status === 429 ? "LOGIN_RATE_LIMITED" : "LOGIN_FAILED",
+      entityId: user?.id ?? fingerprint,
+      actorUserId: response.ok ? user?.id ?? null : null,
+      details: { ...context, status: response.status },
+    });
+  } else if (authPath === "/sign-out") {
+    await recordAuthAudit({
+      db, action: "LOGOUT", entityId: currentEmployee?.id ?? "unknown-session",
+      actorUserId: currentEmployee?.id ?? null, details: context,
+    });
+  } else if (authPath === "/request-password-reset") {
+    await recordAuthAudit({
+      db, action: response.status === 429 ? "PASSWORD_RESET_RATE_LIMITED" : "PASSWORD_RESET_REQUESTED",
+      entityId: email ? await emailFingerprint(email) : "invalid-email", details: { ...context, status: response.status },
+    });
+  } else if (authPath === "/reset-password") {
+    await recordAuthAudit({
+      db, action: response.ok ? "PASSWORD_RESET_ACCEPTED" : "PASSWORD_RESET_REJECTED",
+      entityId: "password-reset", details: { ...context, status: response.status },
+    });
+  }
+  return response;
+}

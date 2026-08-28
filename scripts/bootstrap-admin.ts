@@ -1,0 +1,24 @@
+import "dotenv/config";
+import { eq } from "drizzle-orm";
+import { createDatabase } from "@/db/client";
+import { users } from "@/db/schema";
+import { createProductionAuth, productionAuthConfigured } from "@worker/services/production-auth";
+import { emailDeliveryConfigured } from "@worker/services/resend-email";
+import type { WorkerBindings } from "@worker/types";
+
+const env = process.env as unknown as WorkerBindings;
+const email = process.env.INITIAL_ADMIN_EMAIL?.trim().toLowerCase();
+if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email)) throw new Error("Set INITIAL_ADMIN_EMAIL locally to the approved administrator email.");
+if (!productionAuthConfigured(env)) throw new Error("Set BETTER_AUTH_SECRET and BETTER_AUTH_URL locally before bootstrapping.");
+if (!emailDeliveryConfigured(env)) throw new Error("Set RESEND_API_KEY and EMAIL_FROM locally before bootstrapping.");
+const db = createDatabase(env);
+if (!db) throw new Error("DATABASE_URL is required for the local bootstrap command.");
+const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);
+if (existing) throw new Error("An account already exists for INITIAL_ADMIN_EMAIL; no changes were made.");
+const bytes = crypto.getRandomValues(new Uint8Array(32));
+const password = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+const auth = createProductionAuth(env);
+const created = await auth.api.createUser({ body: { email, name: "BrickellHouse Administrator", password, role: "ADMIN" } });
+await db.update(users).set({ active: true, emailVerified: false, updatedAt: new Date() }).where(eq(users.id, created.user.id));
+await auth.api.requestPasswordReset({ body: { email, redirectTo: `${env.BETTER_AUTH_URL}/reset-password` } });
+console.log("Initial administrator created; a secure password setup email was requested.");
