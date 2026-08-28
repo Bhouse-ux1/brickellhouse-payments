@@ -5,6 +5,7 @@ import { transactionRoutes } from "@worker/routes/transactions";
 import { accountingRoutes } from "@worker/routes/accounting";
 import { webhookRoutes } from "@worker/routes/webhooks";
 import { isApprovedLiveStripeKey } from "@worker/services/stripe-client";
+import { expireAbandonedReaderDisplays } from "@worker/services/terminal-payment";
 import { testAccessConfigured } from "@worker/services/test-access";
 import type { WorkerEnvironment } from "@worker/types";
 
@@ -31,4 +32,11 @@ export function createApp() {
   return app;
 }
 
-export default createApp();
+const app = createApp();
+
+export default {
+  fetch: app.fetch,
+  scheduled(_controller: ScheduledController, env: WorkerEnvironment["Bindings"], ctx: ExecutionContext) {
+    ctx.waitUntil(expireAbandonedReaderDisplays({ env }));
+  },
+};

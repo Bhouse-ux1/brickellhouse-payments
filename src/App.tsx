@@ -52,6 +52,7 @@ function NewTransaction() {
   const [custom, setCustom] = useState<{ description: string; amountCents: number } | null>(null);
   const [notice, setNotice] = useState("");
   const [charging, setCharging] = useState(false);
+  const [readerDisplayPending, setReaderDisplayPending] = useState(false);
 
   useEffect(() => {
     if (preview) return;
@@ -78,10 +79,11 @@ function NewTransaction() {
         const data = await response.json() as {
           transaction: { unitNumber: string; customerEmail: string };
           items: Array<{ productId: string | null; productNameSnapshot: string; unitPriceCentsSnapshot: number; quantity: number }>;
-          payment: { status: string; displayStatus: string };
+          payment: { status: string; displayStatus: string; readerDisplayPending: boolean };
         };
         if (stopped) return;
         setNotice(data.payment.displayStatus);
+        setReaderDisplayPending(data.payment.readerDisplayPending);
         if (hydratedTransactionId !== activeTransactionId) {
           setUnit(data.transaction.unitNumber);
           setEmail(data.transaction.customerEmail);
@@ -94,6 +96,7 @@ function NewTransaction() {
           sessionStorage.removeItem("bh_active_transaction");
           setActiveTransactionId(null);
           setHydratedTransactionId(null);
+          setReaderDisplayPending(false);
           if (data.payment.status === "PAID") {
             setUnit("");
             setEmail("");
@@ -159,7 +162,8 @@ function NewTransaction() {
         setActiveTransactionId(transactionId);
       }
       const terminal = await fetch(`/api/transactions/${transactionId}/payment-attempts`, { method: "POST" });
-      const terminalData = await terminal.json() as { displayStatus?: string; error?: string };
+      const terminalData = await terminal.json() as { displayStatus?: string; error?: string; readerDisplayPending?: boolean };
+      if (typeof terminalData.readerDisplayPending === "boolean") setReaderDisplayPending(terminalData.readerDisplayPending);
       setNotice(terminalData.displayStatus ?? terminalData.error ?? "Payment status is being checked. Do not start another charge.");
     } catch {
       setNotice("The service is temporarily unavailable. No payment request was sent.");
@@ -201,16 +205,17 @@ function NewTransaction() {
         </div>
         <div className="totals"><div><span>Subtotal</span><b>{money.format(subtotal / 100)}</b></div><div><span>Processing fee</span><b>{money.format(fee / 100)}</b></div><div className="grand"><span>Total</span><b>{money.format(total / 100)}</b></div></div>
         {notice && <div className="notice" role="status">{notice}</div>}
-        <button className="charge" disabled={!canCharge || charging} onClick={prepareCharge}><CreditCard size={17}/>{charging ? "Preparing…" : total ? `Charge ${money.format(total / 100)}` : "Charge"}</button>
+        <button className="charge" disabled={!canCharge || charging} onClick={prepareCharge}><CreditCard size={17}/>{charging ? "Preparing…" : readerDisplayPending ? "Start card payment" : total ? `Review ${money.format(total / 100)} on S710` : "Review on S710"}</button>
         {activeTransactionId && <button className="cancelPayment" disabled={charging} onClick={async () => {
           setCharging(true);
           try {
-            const response = await fetch(`/api/transactions/${activeTransactionId}/payment-attempts/cancel`, { method: "POST" });
+            const action = readerDisplayPending ? "clear-terminal" : "cancel";
+            const response = await fetch(`/api/transactions/${activeTransactionId}/payment-attempts/${action}`, { method: "POST" });
             const data = await response.json() as { displayStatus?: string; error?: string };
             setNotice(data.displayStatus ?? data.error ?? "Payment status is being checked.");
-            if (response.ok) { sessionStorage.removeItem("bh_active_transaction"); setActiveTransactionId(null); }
+            if (response.ok) { sessionStorage.removeItem("bh_active_transaction"); setActiveTransactionId(null); setReaderDisplayPending(false); }
           } finally { setCharging(false); }
-        }}>Cancel terminal payment</button>}
+        }}>{readerDisplayPending ? "Clear Terminal" : "Cancel terminal payment"}</button>}
         {!canCharge && <p className="hint">Enter resident details and add a charge to continue.</p>}
       </aside>
     </div>
@@ -218,9 +223,46 @@ function NewTransaction() {
 }
 
 function TransactionsPage() {
+  type HistoryRow = {
+    id: string; number: string; unitNumber: string; customerEmail: string; totalCents: number;
+    paymentStatus: string; createdAt: string; lastErrorCode: string | null;
+  };
+  const [rows, setRows] = useState<HistoryRow[]>([]);
+  const [historyState, setHistoryState] = useState<"loading" | "ready" | "error">("loading");
+  const [query, setQuery] = useState("");
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetch("/api/transactions", { signal: controller.signal }).then(async (response) => {
+      if (!response.ok) throw new Error("History request failed");
+      const data = await response.json() as { transactions: HistoryRow[] };
+      setRows(data.transactions);
+      setHistoryState("ready");
+    }).catch((error: unknown) => {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setHistoryState("error");
+    });
+    return () => controller.abort();
+  }, []);
+  const visibleRows = rows.filter((row) => [row.number, row.unitNumber, row.customerEmail]
+    .some((value) => value.toLowerCase().includes(query.trim().toLowerCase())));
+  const completedCount = rows.filter((row) => row.paymentStatus === "PAID").length;
+  function historyStatus(row: HistoryRow) {
+    if (row.paymentStatus === "PAID") return "Completed payment";
+    if (row.paymentStatus === "FAILED") return "Failed attempt";
+    if (row.paymentStatus === "CANCELED" && ["employee_abandoned", "display_timeout", "reader_display_abandoned"].includes(row.lastErrorCode ?? "")) return "Abandoned attempt";
+    if (row.paymentStatus === "CANCELED") return "Canceled attempt";
+    return "In progress";
+  }
   return <><header className="pageHeader"><div><span>Payments</span><h1>Transactions</h1><p>Find resident payments and review their current status.</p></div><button className="outlineAction" disabled><Download size={14}/>Export CSV</button></header>
-    <div className="records"><div className="recordTools"><label className="recordSearch"><Search size={15}/><input placeholder="Search transaction, unit, or email"/></label><label><span>From</span><input type="date"/></label><label><span>To</span><input type="date"/></label></div>
-      <div className="recordTable"><div className="recordHead"><span>Transaction</span><span>Date</span><span>Unit</span><span>Resident</span><span>Status</span><span>Total</span></div><div className="recordEmpty"><ReceiptText size={24}/><strong>No transactions yet</strong><p>Completed and in-progress payments will appear here.</p></div></div>
+    <div className="records"><div className="recordTools"><label className="recordSearch"><Search size={15}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search transaction, unit, or email"/></label><label><span>From</span><input type="date" disabled/></label><label><span>To</span><input type="date" disabled/></label></div>
+      {historyState === "ready" && completedCount === 0 && rows.length > 0 && <div className="historyNote">No completed payments yet. Canceled, abandoned, failed, and in-progress attempts are listed below.</div>}
+      <div className="recordTable"><div className="recordHead"><span>Transaction</span><span>Date</span><span>Unit</span><span>Resident</span><span>Status</span><span>Total</span></div>
+        {historyState === "loading" && <div className="recordEmpty"><ReceiptText size={24}/><strong>Loading payment activity…</strong></div>}
+        {historyState === "error" && <div className="recordEmpty"><ReceiptText size={24}/><strong>Payment activity is unavailable</strong><p>Please refresh to try again.</p></div>}
+        {historyState === "ready" && rows.length === 0 && <div className="recordEmpty"><ReceiptText size={24}/><strong>No payment activity yet</strong><p>Completed payments and attempts will appear here.</p></div>}
+        {historyState === "ready" && rows.length > 0 && visibleRows.length === 0 && <div className="recordEmpty"><Search size={24}/><strong>No matching payment activity</strong><p>Try a different transaction, unit, or email.</p></div>}
+        {historyState === "ready" && visibleRows.map((row) => { const label = historyStatus(row); return <div className="recordRow" key={row.id}><strong>{row.number}</strong><span>{new Date(row.createdAt).toLocaleString()}</span><span>{row.unitNumber}</span><span>{row.customerEmail}</span><span className={`historyStatus ${label.toLowerCase().replaceAll(" ", "-")}`}>{label}</span><b>{money.format(row.totalCents / 100)}</b></div>; })}
+      </div>
     </div></>;
 }
 

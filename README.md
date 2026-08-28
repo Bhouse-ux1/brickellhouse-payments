@@ -50,11 +50,12 @@ Subscribe it to `terminal.reader.action_succeeded`, `terminal.reader.action_fail
 
 1. The employee passes the temporary access gate.
 2. The Worker creates the trusted database transaction and one payment attempt.
-3. The Worker creates or retrieves the same live card-present PaymentIntent.
-4. The Worker validates the configured physical S710 and live Location, reserves it in PostgreSQL, and calls `process_payment_intent`.
-5. Browser refresh restores the active database transaction; duplicate clicks resume rather than creating another PaymentIntent.
-6. Signed Stripe webhooks are stored by event ID and reconciled idempotently.
-7. Successful reconciliation marks the transaction PAID and creates one pending receipt-delivery record. No email is sent because Resend remains disabled.
+3. The Worker reserves the configured physical S710 in PostgreSQL and displays the exact trusted cart. No PaymentIntent exists at this review stage.
+4. The employee either starts card payment or uses **Clear Terminal**. Starting payment clears the cart display, creates or retrieves the same live card-present PaymentIntent, and calls `process_payment_intent`.
+5. A scheduled two-minute inactivity check reconciles Stripe and PostgreSQL before clearing an abandoned display. It never clears a PaymentIntent or payment reader action.
+6. Browser refresh restores the active database transaction; duplicate clicks resume rather than creating another PaymentIntent.
+7. Signed Stripe webhooks are stored by event ID and reconciled idempotently.
+8. Successful reconciliation marks the transaction PAID and creates one pending receipt-delivery record. No email is sent because Resend remains disabled.
 
 If Stripe or reader state is uncertain after a timeout, the application retains the attempt and lock for reconciliation. It does not create a replacement PaymentIntent automatically.
 

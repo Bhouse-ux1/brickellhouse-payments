@@ -11,6 +11,9 @@
   "vars": {
     "STRIPE_LIVE_MODE_ONLY": "true"
   },
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
   "hyperdrive": [
     {
       "binding": "HYPERDRIVE",

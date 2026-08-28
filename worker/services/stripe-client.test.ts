@@ -146,6 +146,7 @@ describe("live Stripe boundary", () => {
       },
     };
     expect(validateReaderDisplayState(reader, cart)).toBe("SUCCEEDED");
+    expect(validateReaderDisplayState({ ...reader, action: { ...reader.action, status: "in_progress" } }, cart)).toBe("PENDING");
     expect(() => validateReaderDisplayState({ ...reader, action: { ...reader.action, status: "failed", failure_message: "display failed" } }, cart)).toThrow(/display failed/u);
     expect(() => validateReaderDisplayState({ ...reader, action: { ...reader.action, set_reader_display: { ...reader.action.set_reader_display, cart: { ...reader.action.set_reader_display.cart, total: 292 } } } }, cart)).toThrow(/total/u);
   });
