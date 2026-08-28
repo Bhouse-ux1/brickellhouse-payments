@@ -6,7 +6,7 @@ import {
 
 const liveEnv = {
   STRIPE_LIVE_MODE_ONLY: "true",
-  STRIPE_SECRET_KEY: "sk_live_placeholder",
+  STRIPE_SECRET_KEY: "rk_live_placeholder",
   STRIPE_TERMINAL_READER_ID: "tmr_live",
   STRIPE_TERMINAL_LOCATION_ID: "tml_live",
 };
@@ -28,9 +28,11 @@ const trustedIntent = {
 };
 
 describe("live Stripe boundary", () => {
-  it("requires live-only configuration and rejects test keys", () => {
+  it("accepts the approved live restricted key and rejects test or non-restricted keys", () => {
     expect(stripeLiveConfigurationError(liveEnv)).toBeNull();
-    expect(stripeLiveConfigurationError({ ...liveEnv, STRIPE_SECRET_KEY: "sk_test_placeholder" })).toMatch(/live Stripe secret/u);
+    expect(stripeLiveConfigurationError({ ...liveEnv, STRIPE_SECRET_KEY: "sk_test_placeholder" })).toMatch(/live restricted Stripe key/u);
+    expect(stripeLiveConfigurationError({ ...liveEnv, STRIPE_SECRET_KEY: "rk_test_placeholder" })).toMatch(/live restricted Stripe key/u);
+    expect(stripeLiveConfigurationError({ ...liveEnv, STRIPE_SECRET_KEY: "sk_live_placeholder" })).toMatch(/live restricted Stripe key/u);
     expect(stripeLiveConfigurationError({ ...liveEnv, STRIPE_LIVE_MODE_ONLY: "false" })).toMatch(/not enabled/u);
   });
 

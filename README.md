@@ -6,7 +6,7 @@ BrickellHouse Payments is the standalone employee payment website for the physic
 
 This build is **live-mode only**, but deployment does not initiate a payment. A real card charge can begin only after an authenticated employee manually presses the displayed `Charge $XX.XX` button.
 
-- The Worker refuses Stripe initialization unless `STRIPE_LIVE_MODE_ONLY=true` and `STRIPE_SECRET_KEY` begins with `sk_live_`.
+- The Worker refuses Stripe initialization unless `STRIPE_LIVE_MODE_ONLY=true` and the approved restricted `STRIPE_SECRET_KEY` begins with `rk_live_`.
 - Test keys and non-live Stripe objects are rejected.
 - Reader and Location IDs come only from Worker configuration; the browser cannot choose them.
 - The browser submits product IDs, quantities, resident details, and validated Custom Charge inputs only.

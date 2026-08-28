@@ -8,6 +8,20 @@ describe("Worker API boundaries", () => {
     expect(await response.json()).toMatchObject({ ok: true, runtime: "cloudflare-workers" });
   });
 
+  it("reports Terminal configured for an approved live restricted key only", async () => {
+    const configured = {
+      STRIPE_LIVE_MODE_ONLY: "true",
+      STRIPE_SECRET_KEY: "rk_live_placeholder",
+      STRIPE_TERMINAL_READER_ID: "tmr_live",
+      STRIPE_TERMINAL_LOCATION_ID: "tml_live",
+      STRIPE_TERMINAL_WEBHOOK_SECRET: "whsec_placeholder",
+    };
+    const liveResponse = await createApp().request("/api/health", {}, configured);
+    expect(await liveResponse.json()).toMatchObject({ terminalConfigured: true, stripeMode: "live-only" });
+    const testResponse = await createApp().request("/api/health", {}, { ...configured, STRIPE_SECRET_KEY: "rk_test_placeholder" });
+    expect(await testResponse.json()).toMatchObject({ terminalConfigured: false });
+  });
+
   it("rejects unauthenticated product and transaction access", async () => {
     const app = createApp();
     expect((await app.request("/api/products", {}, {})).status).toBe(401);

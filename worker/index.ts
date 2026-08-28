@@ -4,6 +4,7 @@ import { productRoutes } from "@worker/routes/products";
 import { transactionRoutes } from "@worker/routes/transactions";
 import { accountingRoutes } from "@worker/routes/accounting";
 import { webhookRoutes } from "@worker/routes/webhooks";
+import { isApprovedLiveStripeKey } from "@worker/services/stripe-client";
 import { testAccessConfigured } from "@worker/services/test-access";
 import type { WorkerEnvironment } from "@worker/types";
 
@@ -14,7 +15,7 @@ export function createApp() {
     runtime: "cloudflare-workers",
     databaseConfigured: Boolean(c.env.HYPERDRIVE || c.env.DATABASE_URL),
     authenticationConfigured: testAccessConfigured(c.env),
-    terminalConfigured: Boolean(c.env.STRIPE_LIVE_MODE_ONLY === "true" && c.env.STRIPE_SECRET_KEY?.startsWith("sk_live_") && c.env.STRIPE_TERMINAL_READER_ID && c.env.STRIPE_TERMINAL_LOCATION_ID && c.env.STRIPE_TERMINAL_WEBHOOK_SECRET),
+    terminalConfigured: Boolean(c.env.STRIPE_LIVE_MODE_ONLY === "true" && isApprovedLiveStripeKey(c.env.STRIPE_SECRET_KEY) && c.env.STRIPE_TERMINAL_READER_ID && c.env.STRIPE_TERMINAL_LOCATION_ID && c.env.STRIPE_TERMINAL_WEBHOOK_SECRET),
     stripeMode: "live-only",
   }));
   app.route("/api", authRoutes);

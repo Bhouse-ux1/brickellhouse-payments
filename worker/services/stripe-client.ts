@@ -52,10 +52,14 @@ export interface StripeTerminalClient {
   cancelReaderAction(input: { readerId: string; idempotencyKey: string }): Promise<StripeReader>;
 }
 
+export function isApprovedLiveStripeKey(value: string | undefined): boolean {
+  return Boolean(value?.startsWith("rk_live_"));
+}
+
 export function stripeLiveConfigurationError(env: WorkerBindings): string | null {
   if (env.STRIPE_LIVE_MODE_ONLY !== "true") return "Stripe live-only mode is not enabled";
   if (!env.STRIPE_SECRET_KEY) return "Stripe is not configured";
-  if (!env.STRIPE_SECRET_KEY.startsWith("sk_live_")) return "Only a live Stripe secret is accepted";
+  if (!isApprovedLiveStripeKey(env.STRIPE_SECRET_KEY)) return "Only the approved live restricted Stripe key is accepted";
   if (!env.STRIPE_TERMINAL_READER_ID || !env.STRIPE_TERMINAL_LOCATION_ID) return "The configured S710 is incomplete";
   return null;
 }

@@ -9,7 +9,7 @@ TEST_SESSION_SECRET=replace-with-at-least-32-random-characters
 DATABASE_URL=
 
 # Physical Stripe S710 — LIVE MODE ONLY. Store production values as Cloudflare secrets.
-STRIPE_SECRET_KEY=sk_live_replace_me
+STRIPE_SECRET_KEY=rk_live_replace_me
 STRIPE_TERMINAL_READER_ID=tmr_replace_me
 STRIPE_TERMINAL_LOCATION_ID=tml_replace_me
 STRIPE_TERMINAL_WEBHOOK_SECRET=whsec_replace_me
