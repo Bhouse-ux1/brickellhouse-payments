@@ -9,6 +9,10 @@ import { productCatalog, type TrustedProduct } from "@/domain/products/catalog";
 import { parseMoneyInput } from "@/domain/transactions/validation";
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+type CatalogProduct = Omit<TrustedProduct, "glCode">;
+const previewCatalog: readonly CatalogProduct[] = import.meta.env.DEV
+  ? productCatalog
+  : [];
 const icons: Record<string, ComponentType<{ size?: number; strokeWidth?: number }>> = {
   parking_fob: CircleParking, elevator_fob: Building2, mailbox_key_copy: KeyRound,
   unit_key_copy: KeyRound, smoke_detector_battery: BellRing, ac_filter_replacement: Wind,
@@ -33,6 +37,9 @@ function Shell({ children, employeeName }: { children: ReactNode; employeeName: 
 }
 
 function NewTransaction() {
+  const preview = import.meta.env.DEV && new URLSearchParams(window.location.search).get("preview") === "1";
+  const [catalog, setCatalog] = useState<readonly CatalogProduct[]>(() => preview ? previewCatalog : []);
+  const [catalogState, setCatalogState] = useState<"loading" | "ready" | "error">(() => preview ? "ready" : "loading");
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [unit, setUnit] = useState("");
   const [email, setEmail] = useState("");
@@ -44,16 +51,31 @@ function NewTransaction() {
   const [notice, setNotice] = useState("");
   const [charging, setCharging] = useState(false);
 
-  const products = useMemo(() => productCatalog.filter((p) =>
-    (category === "All" || p.category === category) && p.displayName.toLowerCase().includes(search.toLowerCase())), [category, search]);
-  const subtotal = productCatalog.reduce((sum, p) => sum + p.priceCents * (quantities[p.id] ?? 0), custom?.amountCents ?? 0);
+  useEffect(() => {
+    if (preview) return;
+    const controller = new AbortController();
+    void fetch("/api/products", { signal: controller.signal }).then(async (response) => {
+      if (!response.ok) throw new Error("Catalog request failed");
+      const data = await response.json() as { products: CatalogProduct[] };
+      setCatalog(data.products);
+      setCatalogState("ready");
+    }).catch((error: unknown) => {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setCatalogState("error");
+    });
+    return () => controller.abort();
+  }, [preview]);
+
+  const products = useMemo(() => catalog.filter((p) =>
+    (category === "All" || p.category === category) && p.displayName.toLowerCase().includes(search.toLowerCase())), [catalog, category, search]);
+  const subtotal = catalog.reduce((sum, p) => sum + p.priceCents * (quantities[p.id] ?? 0), custom?.amountCents ?? 0);
   const fee = calculateProcessingFee(subtotal);
   const total = subtotal + fee;
-  const selected = productCatalog.filter((p) => quantities[p.id]);
+  const selected = catalog.filter((p) => quantities[p.id]);
   const amountCents = parseMoneyInput(amount);
   const canCharge = Boolean(unit.trim() && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && (selected.length || custom));
 
-  function change(product: TrustedProduct, delta: number) {
+  function change(product: CatalogProduct, delta: number) {
     setNotice("");
     setQuantities((current) => {
       const next = product.quantityAllowed ? Math.max(0, (current[product.id] ?? 0) + delta) : delta > 0 ? 1 : 0;
@@ -111,6 +133,8 @@ function NewTransaction() {
           <label className="amount"><span>Amount</span><div><i>$</i><input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" placeholder="0.00"/></div></label>
           <button disabled={!amountCents || description.trim().length < 2} onClick={() => { if (amountCents) { setCustom({ description: description.trim(), amountCents }); setDescription(""); setAmount(""); } }}><Plus size={15}/>Add</button>
         </div>
+        {catalogState === "loading" && <div className="notice" role="status">Loading the trusted product catalog…</div>}
+        {catalogState === "error" && <div className="notice" role="alert">The product catalog is temporarily unavailable.</div>}
         <div className="products">{products.map((product) => { const Icon = icons[product.id] ?? Wrench; const qty = quantities[product.id] ?? 0; return <button key={product.id} className={qty ? "product selected" : "product"} onClick={() => change(product, 1)}>
           <span className="productIcon"><Icon size={20} strokeWidth={1.7}/></span><span className="productCopy"><small>{product.category}</small><strong>{product.displayName}</strong><b>{money.format(product.priceCents / 100)}</b></span><span className="addMark">{qty || <Plus size={14}/>}</span>
         </button>; })}</div>
