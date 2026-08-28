@@ -98,9 +98,34 @@ export async function startTerminalPayment(input: {
   await input.db.update(paymentAttempts).set({ status: "READER_RESERVED", terminalReaderId: internalReaderId, updatedAt: new Date() })
     .where(eq(paymentAttempts.id, attempt.id));
 
-  const stripe = input.stripe ?? createStripeTerminalClient(input.env);
-  const stripeReader = await stripe.retrieveReader(input.env.STRIPE_TERMINAL_READER_ID!);
-  validateLiveReader(stripeReader, input.env.STRIPE_TERMINAL_READER_ID!, input.env.STRIPE_TERMINAL_LOCATION_ID!);
+  let stripe: StripeTerminalClient;
+  let stripeReader: Awaited<ReturnType<StripeTerminalClient["retrieveReader"]>>;
+  try {
+    stripe = input.stripe ?? createStripeTerminalClient(input.env);
+    stripeReader = await stripe.retrieveReader(input.env.STRIPE_TERMINAL_READER_ID!);
+    validateLiveReader(stripeReader, input.env.STRIPE_TERMINAL_READER_ID!, input.env.STRIPE_TERMINAL_LOCATION_ID!);
+  } catch (error) {
+    const stripeError = error instanceof StripeApiError ? error : null;
+    console.error("Terminal payment reader preflight failed", {
+      stage: "retrieve_reader",
+      transactionId: transaction.id,
+      paymentAttemptId: attempt.id,
+      errorName: error instanceof Error ? error.name : "UnknownError",
+      stripeCode: stripeError?.code,
+      stripeStatus: stripeError?.status,
+      message: error instanceof Error ? error.message : "Unknown reader preflight failure",
+    });
+    await input.db.update(paymentAttempts).set({
+      status: "CREATED",
+      lastErrorCode: stripeError?.code ?? "READER_PREFLIGHT_FAILED",
+      lastErrorMessage: "Terminal availability could not be verified.",
+      updatedAt: new Date(),
+    }).where(eq(paymentAttempts.id, attempt.id));
+    await input.db.update(transactions).set({ paymentStatus: "TERMINAL_OFFLINE", updatedAt: new Date() })
+      .where(eq(transactions.id, transaction.id));
+    await releaseReaderReservation(input.db, attempt.id);
+    throw new TerminalFlowError("TERMINAL_UNAVAILABLE", "Unable to start payment", 503);
+  }
   if (stripeReader.status === "offline") {
     await input.db.update(transactions).set({ paymentStatus: "TERMINAL_OFFLINE", updatedAt: new Date() }).where(eq(transactions.id, transaction.id));
     await releaseReaderReservation(input.db, attempt.id);

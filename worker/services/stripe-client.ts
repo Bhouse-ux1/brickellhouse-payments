@@ -98,7 +98,10 @@ class FetchStripeTerminalClient implements StripeTerminalClient {
   constructor(private readonly secretKey: string, private readonly fetcher: typeof fetch = fetch) {}
 
   private async request<T>(method: "GET" | "POST", path: string, parameters?: URLSearchParams, idempotencyKey?: string): Promise<T> {
-    const response = await this.fetcher(`https://api.stripe.com${path}`, {
+    // Cloudflare's native fetch must keep the global execution-context receiver.
+    // Calling it as `this.fetcher(...)` binds it to this client and throws
+    // "Illegal invocation" before any request reaches Stripe.
+    const response = await this.fetcher.call(globalThis, `https://api.stripe.com${path}`, {
       method,
       headers: {
         authorization: `Bearer ${this.secretKey}`,

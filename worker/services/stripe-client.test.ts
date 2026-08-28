@@ -51,6 +51,19 @@ describe("live Stripe boundary", () => {
     expect(fetcher).toHaveBeenCalledOnce();
   });
 
+  it("invokes the Stripe fetcher with Cloudflare's global receiver", async () => {
+    const fetcher = vi.fn(function (this: typeof globalThis, url: string | URL | Request) {
+      expect(this).toBe(globalThis);
+      expect(String(url)).toContain("/v1/terminal/readers/tmr_live");
+      return Promise.resolve(new Response(JSON.stringify({
+        id: "tmr_live", object: "terminal.reader", livemode: true, location: "tml_live", status: "online",
+      }), { status: 200 }));
+    });
+
+    const client = createStripeTerminalClient(liveEnv, fetcher as typeof fetch);
+    await expect(client.retrieveReader("tmr_live")).resolves.toMatchObject({ id: "tmr_live", status: "online" });
+  });
+
   it("rejects wrong intent identity, amount, currency, or non-live evidence", () => {
     const input = { paymentIntent: trustedIntent, expectedPaymentIntentId: "pi_live", transactionId: "txn-1", transactionNumber: "POS-000001", amountCents: 10_000 };
     expect(() => validateLivePaymentIntent(input)).not.toThrow();
