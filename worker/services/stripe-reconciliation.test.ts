@@ -38,4 +38,26 @@ describe("Stripe reconciliation decisions", () => {
     expect(result).toEqual({ received: true, duplicate: true });
     expect(stripe.retrievePaymentIntent).not.toHaveBeenCalled();
   });
+
+  it("records reader-display webhooks as ignored instead of treating them as payment events", async () => {
+    const returning = vi.fn().mockResolvedValue([{ id: "row-display" }]);
+    const where = vi.fn().mockResolvedValue([]);
+    const set = vi.fn(() => ({ where }));
+    const db = {
+      insert: vi.fn(() => ({ values: () => ({ onConflictDoNothing: () => ({ returning }) }) })),
+      update: vi.fn(() => ({ set })),
+    };
+    const result = await processStripeEvent({
+      db: db as never,
+      env: {} as never,
+      rawBody: "display-event",
+      event: {
+        id: "evt_display", object: "event", type: "terminal.reader.action_succeeded", livemode: true,
+        data: { object: { id: "tmr_live", object: "terminal.reader", action: { type: "set_reader_display", status: "succeeded" } } },
+      },
+      stripe: { retrievePaymentIntent: vi.fn() } as never,
+    });
+    expect(result).toEqual({ received: true, ignored: true });
+    expect(db.update).toHaveBeenCalledOnce();
+  });
 });

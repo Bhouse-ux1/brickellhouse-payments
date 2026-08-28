@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { decideExistingPaymentIntentAction } from "./terminal-payment";
+import { describe, expect, it, vi } from "vitest";
+import { decideExistingPaymentIntentAction, runAfterTrustedReaderDisplay } from "./terminal-payment";
 
 describe("Terminal payment recovery", () => {
   it("does not process a duplicate Charge click while the reader is active", () => {
@@ -17,5 +17,14 @@ describe("Terminal payment recovery", () => {
 
   it("reconciles success instead of starting another reader action", () => {
     expect(decideExistingPaymentIntentAction({ attemptStatus: "PROCESSING", paymentIntentStatus: "succeeded" })).toBe("RECONCILE_SUCCESS");
+  });
+
+  it("never creates or processes a payment when the trusted reader display fails", async () => {
+    const proceed = vi.fn(async () => "payment action");
+    await expect(runAfterTrustedReaderDisplay({
+      confirmDisplay: async () => { throw new Error("display failed"); },
+      proceed,
+    })).rejects.toThrow(/display failed/u);
+    expect(proceed).not.toHaveBeenCalled();
   });
 });

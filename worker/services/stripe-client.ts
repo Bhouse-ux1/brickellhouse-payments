@@ -18,6 +18,12 @@ export type StripePaymentIntent = {
   latest_charge?: string | StripeCharge | null;
 };
 
+export type StripeReaderCart = {
+  currency: "usd";
+  lineItems: Array<{ amountCents: number; description: string; quantity: number }>;
+  totalCents: number;
+};
+
 export type StripeReader = {
   id: string;
   object: "terminal.reader";
@@ -30,6 +36,14 @@ export type StripeReader = {
     failure_code?: string | null;
     failure_message?: string | null;
     process_payment_intent?: { payment_intent?: string | StripePaymentIntent };
+    set_reader_display?: {
+      type?: string;
+      cart?: {
+        currency?: string;
+        line_items?: Array<{ amount?: number; description?: string; quantity?: number }>;
+        total?: number;
+      };
+    };
   } | null;
 };
 
@@ -48,6 +62,7 @@ export interface StripeTerminalClient {
   }): Promise<StripePaymentIntent>;
   retrievePaymentIntent(id: string): Promise<StripePaymentIntent>;
   retrieveReader(id: string): Promise<StripeReader>;
+  setReaderDisplay(input: { readerId: string; cart: StripeReaderCart; idempotencyKey: string }): Promise<StripeReader>;
   processPaymentIntent(input: { readerId: string; paymentIntentId: string; idempotencyKey: string }): Promise<StripeReader>;
   cancelReaderAction(input: { readerId: string; idempotencyKey: string }): Promise<StripeReader>;
 }
@@ -72,6 +87,27 @@ export function validateLiveReader(reader: StripeReader, expectedReaderId: strin
   if (reader.object !== "terminal.reader" || !reader.livemode) throw new Error("Stripe reader is not a live-mode Terminal reader.");
   if (reader.id !== expectedReaderId) throw new Error("Stripe reader identity does not match configuration.");
   if (stripeReaderLocationId(reader) !== expectedLocationId) throw new Error("Stripe reader location does not match configuration.");
+}
+
+export function validateReaderDisplayState(reader: StripeReader, expectedCart: StripeReaderCart): "PENDING" | "SUCCEEDED" {
+  const action = reader.action;
+  if (action?.type !== "set_reader_display") throw new Error("Stripe reader did not acknowledge the cart display action.");
+  if (action.status === "failed") throw new Error(action.failure_message ?? "Stripe reader cart display failed.");
+  if (action.status !== "in_progress" && action.status !== "succeeded") throw new Error("Stripe reader cart display state is uncertain.");
+
+  const displayedCart = action.set_reader_display?.cart;
+  if (!displayedCart || action.set_reader_display?.type !== "cart") throw new Error("Stripe reader did not return the expected cart display.");
+  if (displayedCart.currency !== expectedCart.currency || displayedCart.total !== expectedCart.totalCents) {
+    throw new Error("Stripe reader cart total does not match the payment amount.");
+  }
+  if (displayedCart.line_items?.length !== expectedCart.lineItems.length) throw new Error("Stripe reader cart items are incomplete.");
+  expectedCart.lineItems.forEach((expected, index) => {
+    const displayed = displayedCart.line_items?.[index];
+    if (!displayed || displayed.amount !== expected.amountCents || displayed.description !== expected.description || displayed.quantity !== expected.quantity) {
+      throw new Error("Stripe reader cart item does not match the trusted transaction.");
+    }
+  });
+  return action.status === "succeeded" ? "SUCCEEDED" : "PENDING";
 }
 
 export function validateLivePaymentIntent(input: {
@@ -129,6 +165,20 @@ class FetchStripeTerminalClient implements StripeTerminalClient {
 
   retrieveReader(id: string): Promise<StripeReader> {
     return this.request("GET", `/v1/terminal/readers/${encodeURIComponent(id)}`);
+  }
+
+  setReaderDisplay(input: { readerId: string; cart: StripeReaderCart; idempotencyKey: string }): Promise<StripeReader> {
+    const form = new URLSearchParams({
+      type: "cart",
+      "cart[currency]": input.cart.currency,
+      "cart[total]": String(input.cart.totalCents),
+    });
+    input.cart.lineItems.forEach((item, index) => {
+      form.append(`cart[line_items][${index}][amount]`, String(item.amountCents));
+      form.append(`cart[line_items][${index}][description]`, item.description);
+      form.append(`cart[line_items][${index}][quantity]`, String(item.quantity));
+    });
+    return this.request("POST", `/v1/terminal/readers/${encodeURIComponent(input.readerId)}/set_reader_display`, form, input.idempotencyKey);
   }
 
   processPaymentIntent(input: { readerId: string; paymentIntentId: string; idempotencyKey: string }): Promise<StripeReader> {

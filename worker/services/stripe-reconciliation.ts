@@ -94,6 +94,10 @@ export async function processStripeEvent(input: {
     }
 
     const stripeObject = event.data.object;
+    if (isReader(stripeObject) && stripeObject.action?.type !== "process_payment_intent") {
+      await input.db.update(stripeEvents).set({ processedAt: new Date() }).where(eq(stripeEvents.id, eventRowId));
+      return { received: true, ignored: true };
+    }
     const paymentIntentId = referencedPaymentIntent(stripeObject);
     if (!paymentIntentId) throw new Error("Stripe event does not reference a PaymentIntent.");
     const [attempt] = await input.db.select().from(paymentAttempts)

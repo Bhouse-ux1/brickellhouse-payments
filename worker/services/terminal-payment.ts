@@ -1,7 +1,9 @@
 import { desc, eq } from "drizzle-orm";
 import type { Database } from "@/db/client";
-import { paymentAttempts, transactions } from "@/db/schema";
+import { paymentAttempts, transactionItems, transactions } from "@/db/schema";
 import { buildPaymentAttemptIdempotencyKey } from "@/domain/payments/idempotency";
+import { buildTrustedReaderCart } from "@/domain/payments/reader-cart";
+import type { TrustedReaderCart } from "@/domain/payments/reader-cart";
 import { employeePaymentStatus } from "@/domain/payments/status-display";
 import {
   extendReaderReservation, releaseReaderReservation, reserveConfiguredReader, syncConfiguredReader,
@@ -9,9 +11,9 @@ import {
 import { markPaymentFailed, markPaymentSucceeded } from "@worker/services/payment-reconciliation";
 import {
   createStripeTerminalClient, StripeApiError, stripeLiveConfigurationError,
-  validateLivePaymentIntent, validateLiveReader,
+  validateLivePaymentIntent, validateLiveReader, validateReaderDisplayState,
 } from "@worker/services/stripe-client";
-import type { StripeTerminalClient } from "@worker/services/stripe-client";
+import type { StripeReaderCart, StripeTerminalClient } from "@worker/services/stripe-client";
 import type { WorkerBindings } from "@worker/types";
 
 type PaymentAttempt = typeof paymentAttempts.$inferSelect;
@@ -60,6 +62,36 @@ function readerIntentId(reader: Awaited<ReturnType<StripeTerminalClient["process
   return typeof value === "string" ? value : value?.id ?? null;
 }
 
+const READER_DISPLAY_POLL_ATTEMPTS = 20;
+const READER_DISPLAY_POLL_DELAY_MS = 250;
+
+async function wait(delayMs: number) {
+  await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+}
+
+async function setTrustedReaderDisplay(input: {
+  stripe: StripeTerminalClient;
+  readerId: string;
+  locationId: string;
+  idempotencyKey: string;
+  cart: StripeReaderCart;
+}) {
+  let reader = await input.stripe.setReaderDisplay({
+    readerId: input.readerId,
+    cart: input.cart,
+    idempotencyKey: `${input.idempotencyKey}:display`,
+  });
+  for (let poll = 0; poll < READER_DISPLAY_POLL_ATTEMPTS; poll += 1) {
+    validateLiveReader(reader, input.readerId, input.locationId);
+    const state = validateReaderDisplayState(reader, input.cart);
+    if (state === "SUCCEEDED") return;
+    if (poll === READER_DISPLAY_POLL_ATTEMPTS - 1) break;
+    await wait(READER_DISPLAY_POLL_DELAY_MS);
+    reader = await input.stripe.retrieveReader(input.readerId);
+  }
+  throw new Error("Stripe reader cart display did not complete in time.");
+}
+
 export function decideExistingPaymentIntentAction(input: { attemptStatus: PaymentAttempt["status"]; paymentIntentStatus: string }) {
   if (input.paymentIntentStatus === "succeeded") return "RECONCILE_SUCCESS" as const;
   if (["SENT_TO_READER", "WAITING_FOR_CUSTOMER", "PROCESSING"].includes(input.attemptStatus)) {
@@ -67,6 +99,14 @@ export function decideExistingPaymentIntentAction(input: { attemptStatus: Paymen
   }
   if (input.paymentIntentStatus === "requires_payment_method") return "PROCESS_REUSING_INTENT" as const;
   return "SHOW_PROCESSING" as const;
+}
+
+export async function runAfterTrustedReaderDisplay<T>(input: {
+  confirmDisplay: () => Promise<void>;
+  proceed: () => Promise<T>;
+}): Promise<T> {
+  await input.confirmDisplay();
+  return input.proceed();
 }
 
 export async function startTerminalPayment(input: {
@@ -81,9 +121,28 @@ export async function startTerminalPayment(input: {
   if (!transaction) throw new TerminalFlowError("TRANSACTION_NOT_FOUND", "Transaction not found", 404);
   if (transaction.paymentStatus === "PAID") return view(transaction.id, "PAID");
 
+  const itemSnapshots = await input.db.select({
+    productId: transactionItems.productId,
+    productNameSnapshot: transactionItems.productNameSnapshot,
+    unitPriceCentsSnapshot: transactionItems.unitPriceCentsSnapshot,
+    quantity: transactionItems.quantity,
+    lineTotalCents: transactionItems.lineTotalCents,
+  }).from(transactionItems).where(eq(transactionItems.transactionId, transaction.id));
+  let readerCart: TrustedReaderCart;
+  try {
+    readerCart = buildTrustedReaderCart(transaction, itemSnapshots);
+  } catch (error) {
+    console.error("Trusted reader cart validation failed", {
+      transactionId: transaction.id,
+      message: error instanceof Error ? error.message : "Unknown cart validation failure",
+    });
+    throw new TerminalFlowError("PAYMENT_DETAILS_INVALID", "Unable to start payment", 409);
+  }
+  const paymentAmountCents = readerCart.totalCents;
+
   await syncConfiguredReader(input.db, input.env);
   let attempt = await getOrCreatePaymentAttempt(input.db, transaction);
-  if (attempt.expectedAmountCents !== transaction.totalCents) throw new TerminalFlowError("AMOUNT_MISMATCH", "Stored payment amount is inconsistent");
+  if (attempt.expectedAmountCents !== paymentAmountCents) throw new TerminalFlowError("AMOUNT_MISMATCH", "Stored payment amount is inconsistent");
 
   const reservation = await reserveConfiguredReader(input.db, input.env, attempt.id);
   if (reservation.status === "TERMINAL_OFFLINE") {
@@ -132,12 +191,50 @@ export async function startTerminalPayment(input: {
     throw new TerminalFlowError("TERMINAL_OFFLINE", employeePaymentStatus.TERMINAL_OFFLINE, 503);
   }
 
+  let readerDisplayReady = false;
+  const ensureReaderDisplay = async () => {
+    if (readerDisplayReady) return;
+    try {
+      await setTrustedReaderDisplay({
+        stripe,
+        readerId: input.env.STRIPE_TERMINAL_READER_ID!,
+        locationId: input.env.STRIPE_TERMINAL_LOCATION_ID!,
+        idempotencyKey: attempt.idempotencyKey,
+        cart: readerCart,
+      });
+      readerDisplayReady = true;
+    } catch (error) {
+      const stripeError = error instanceof StripeApiError ? error : null;
+      console.error("Terminal reader cart display failed", {
+        stage: "set_reader_display",
+        transactionId: transaction.id,
+        paymentAttemptId: attempt.id,
+        errorName: error instanceof Error ? error.name : "UnknownError",
+        stripeCode: stripeError?.code,
+        stripeStatus: stripeError?.status,
+        message: error instanceof Error ? error.message : "Unknown reader display failure",
+      });
+      await input.db.update(paymentAttempts).set({
+        status: attempt.stripePaymentIntentId ? "PAYMENT_INTENT_CREATED" : "CREATED",
+        lastErrorCode: stripeError?.code ?? "READER_DISPLAY_FAILED",
+        lastErrorMessage: "Terminal could not display the trusted payment details.",
+        updatedAt: new Date(),
+      }).where(eq(paymentAttempts.id, attempt.id));
+      await input.db.update(transactions).set({
+        paymentStatus: attempt.stripePaymentIntentId ? "READY" : "DRAFT",
+        updatedAt: new Date(),
+      }).where(eq(transactions.id, transaction.id));
+      await releaseReaderReservation(input.db, attempt.id);
+      throw new TerminalFlowError("TERMINAL_DISPLAY_UNAVAILABLE", "Unable to display payment details", 503);
+    }
+  };
+
   let paymentIntent;
   if (attempt.stripePaymentIntentId) {
     paymentIntent = await stripe.retrievePaymentIntent(attempt.stripePaymentIntentId);
     validateLivePaymentIntent({
       paymentIntent, expectedPaymentIntentId: attempt.stripePaymentIntentId,
-      transactionId: transaction.id, transactionNumber: transaction.number, amountCents: transaction.totalCents,
+      transactionId: transaction.id, transactionNumber: transaction.number, amountCents: paymentAmountCents,
     });
     const action = decideExistingPaymentIntentAction({ attemptStatus: attempt.status, paymentIntentStatus: paymentIntent.status });
     if (action === "RECONCILE_SUCCESS") {
@@ -153,20 +250,23 @@ export async function startTerminalPayment(input: {
       return view(transaction.id, action === "SHOW_PROCESSING" ? "PROCESSING" : "WAITING_FOR_CUSTOMER");
     }
   } else {
-    paymentIntent = await stripe.createPaymentIntent({
-      amountCents: transaction.totalCents,
-      idempotencyKey: attempt.idempotencyKey,
-      metadata: {
-        source: "brickellhouse_payments",
-        transaction_number: transaction.number,
-        unit_number: transaction.unitNumber,
-        internal_transaction_id: transaction.id,
-        payment_attempt_id: attempt.id,
-      },
+    paymentIntent = await runAfterTrustedReaderDisplay({
+      confirmDisplay: ensureReaderDisplay,
+      proceed: () => stripe.createPaymentIntent({
+        amountCents: paymentAmountCents,
+        idempotencyKey: attempt.idempotencyKey,
+        metadata: {
+          source: "brickellhouse_payments",
+          transaction_number: transaction.number,
+          unit_number: transaction.unitNumber,
+          internal_transaction_id: transaction.id,
+          payment_attempt_id: attempt.id,
+        },
+      }),
     });
     validateLivePaymentIntent({
       paymentIntent, transactionId: transaction.id,
-      transactionNumber: transaction.number, amountCents: transaction.totalCents,
+      transactionNumber: transaction.number, amountCents: paymentAmountCents,
     });
     await input.db.update(paymentAttempts).set({
       stripePaymentIntentId: paymentIntent.id, status: "PAYMENT_INTENT_CREATED", updatedAt: new Date(),
@@ -178,10 +278,13 @@ export async function startTerminalPayment(input: {
   }
 
   try {
-    const processedReader = await stripe.processPaymentIntent({
-      readerId: input.env.STRIPE_TERMINAL_READER_ID!,
-      paymentIntentId: paymentIntent.id,
-      idempotencyKey: `${attempt.idempotencyKey}:reader`,
+    const processedReader = await runAfterTrustedReaderDisplay({
+      confirmDisplay: ensureReaderDisplay,
+      proceed: () => stripe.processPaymentIntent({
+        readerId: input.env.STRIPE_TERMINAL_READER_ID!,
+        paymentIntentId: paymentIntent.id,
+        idempotencyKey: `${attempt.idempotencyKey}:reader`,
+      }),
     });
     validateLiveReader(processedReader, input.env.STRIPE_TERMINAL_READER_ID!, input.env.STRIPE_TERMINAL_LOCATION_ID!);
     if (readerIntentId(processedReader) !== paymentIntent.id) throw new Error("Reader action is linked to an unexpected PaymentIntent.");
