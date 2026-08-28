@@ -10,7 +10,8 @@
   },
   "vars": {
     "STRIPE_LIVE_MODE_ONLY": "true",
-    "BETTER_AUTH_URL": "https://brickellhouse-payments.assistantmanager.workers.dev"
+    "BETTER_AUTH_URL": "https://brickellhouse-payments.assistantmanager.workers.dev",
+    "EMAIL_FROM": "orders@brickellhouse.org"
   },
   "triggers": {
     "crons": ["* * * * *"]
