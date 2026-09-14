@@ -42,10 +42,12 @@ describe("Worker API boundaries", () => {
   it("keeps the six-hour database schedule read-only", async () => {
     const keepalive = vi.fn(async () => undefined);
     const expireDisplays = vi.fn(async () => ({ expired: 0, deferred: 0 }));
+    const reconcilePayments = vi.fn(async () => ({ reconciled: 0, deferred: 0 }));
+    const deliverEmails = vi.fn(async () => ({ processed: 0 }));
     const waitUntil = vi.fn();
     const env = { HYPERDRIVE: { connectionString: "postgresql://placeholder" } as Hyperdrive };
 
-    createScheduledHandler(keepalive, expireDisplays)(
+    createScheduledHandler(keepalive, expireDisplays, reconcilePayments, deliverEmails)(
       { cron: "0 */6 * * *" } as ScheduledController,
       env,
       { waitUntil } as unknown as ExecutionContext,
@@ -54,17 +56,21 @@ describe("Worker API boundaries", () => {
     expect(keepalive).toHaveBeenCalledOnce();
     expect(keepalive).toHaveBeenCalledWith(env);
     expect(expireDisplays).not.toHaveBeenCalled();
+    expect(reconcilePayments).not.toHaveBeenCalled();
+    expect(deliverEmails).not.toHaveBeenCalled();
     expect(waitUntil).toHaveBeenCalledWith(expect.any(Promise));
     await waitUntil.mock.calls[0]?.[0];
   });
 
-  it("routes the minute maintenance schedule only to abandoned-display reconciliation", async () => {
+  it("runs non-charging payment recovery and pending delivery on the minute maintenance schedule", async () => {
     const keepalive = vi.fn(async () => undefined);
     const expireDisplays = vi.fn(async () => ({ expired: 0, deferred: 0 }));
+    const reconcilePayments = vi.fn(async () => ({ reconciled: 0, deferred: 0 }));
+    const deliverEmails = vi.fn(async () => ({ processed: 0 }));
     const waitUntil = vi.fn();
     const env = { HYPERDRIVE: { connectionString: "postgresql://placeholder" } as Hyperdrive };
 
-    createScheduledHandler(keepalive, expireDisplays)(
+    createScheduledHandler(keepalive, expireDisplays, reconcilePayments, deliverEmails)(
       { cron: "* * * * *" } as ScheduledController,
       env,
       { waitUntil } as unknown as ExecutionContext,
@@ -73,6 +79,10 @@ describe("Worker API boundaries", () => {
     expect(keepalive).not.toHaveBeenCalled();
     expect(expireDisplays).toHaveBeenCalledOnce();
     expect(expireDisplays).toHaveBeenCalledWith({ env });
+    expect(reconcilePayments).toHaveBeenCalledOnce();
+    expect(reconcilePayments).toHaveBeenCalledWith({ env });
+    expect(deliverEmails).toHaveBeenCalledOnce();
+    expect(deliverEmails).toHaveBeenCalledWith(env);
     await waitUntil.mock.calls[0]?.[0];
   });
 });

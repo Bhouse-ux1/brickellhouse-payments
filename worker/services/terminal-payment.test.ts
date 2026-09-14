@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { paymentAttempts } from "@/db/schema";
-import { classifyReaderAction, decideExistingPaymentIntentAction, decideReaderDisplayRecovery, READER_DISPLAY_TIMEOUT_MS, shouldRecoverExpiredIdleReservation } from "./terminal-payment";
+import {
+  classifyReaderAction, decideExistingPaymentIntentAction, decidePolledPaymentReconciliation,
+  decideReaderDisplayRecovery, READER_DISPLAY_TIMEOUT_MS, shouldRecoverExpiredIdleReservation,
+} from "./terminal-payment";
 
 describe("Terminal payment recovery", () => {
   it("does not process a duplicate Charge click while the reader is active", () => {
@@ -66,5 +69,48 @@ describe("Terminal payment recovery", () => {
     expect(shouldRecoverExpiredIdleReservation({ ...safe, readerAction: "PAYMENT_ACTIVE" })).toBe(false);
     expect(shouldRecoverExpiredIdleReservation({ ...safe, hasPaymentIntent: true })).toBe(false);
     expect(shouldRecoverExpiredIdleReservation({ ...safe, hasReaderOperation: true })).toBe(false);
+  });
+
+  it("finalizes only an exact succeeded PaymentIntent during polling", () => {
+    const base = {
+      paymentIntentStatus: "succeeded",
+      amountReceived: 51,
+      expectedAmountCents: 51,
+      readerAction: "IDLE" as const,
+      readerActionStatus: null,
+      readerPaymentIntentMatches: false,
+      readerFailureCode: null,
+      attemptStatus: "WAITING_FOR_CUSTOMER" as const,
+    };
+    expect(decidePolledPaymentReconciliation(base)).toBe("SUCCEEDED");
+    expect(decidePolledPaymentReconciliation({ ...base, amountReceived: 50 })).toBe("UNCERTAIN");
+  });
+
+  it("keeps an active reader action waiting and releases only definitive endings", () => {
+    const active = {
+      paymentIntentStatus: "requires_payment_method",
+      expectedAmountCents: 51,
+      readerAction: "PAYMENT_ACTIVE" as const,
+      readerActionStatus: "in_progress",
+      readerPaymentIntentMatches: true,
+      readerFailureCode: null,
+      attemptStatus: "WAITING_FOR_CUSTOMER" as const,
+    };
+    expect(decidePolledPaymentReconciliation(active)).toBe("WAITING");
+    expect(decidePolledPaymentReconciliation({ ...active, readerActionStatus: "failed", readerFailureCode: "card_declined" })).toBe("FAILED");
+    expect(decidePolledPaymentReconciliation({ ...active, readerActionStatus: "failed", readerFailureCode: "customer_canceled" })).toBe("CANCELED");
+    expect(decidePolledPaymentReconciliation({ ...active, readerAction: "UNCERTAIN", readerPaymentIntentMatches: false })).toBe("UNCERTAIN");
+  });
+
+  it("recovers a refresh with an idle, not-yet-processed PaymentIntent without creating another one", () => {
+    expect(decidePolledPaymentReconciliation({
+      paymentIntentStatus: "requires_payment_method",
+      expectedAmountCents: 51,
+      readerAction: "IDLE",
+      readerActionStatus: null,
+      readerPaymentIntentMatches: false,
+      readerFailureCode: null,
+      attemptStatus: "PAYMENT_INTENT_CREATED",
+    })).toBe("READY");
   });
 });

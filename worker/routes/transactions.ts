@@ -8,10 +8,10 @@ import { FinancialValidationError } from "@/domain/transactions/reconstruct";
 import { createDraftTransaction } from "@/services/transactions/create-draft";
 import { requireEmployee } from "@worker/middleware/require-employee";
 import {
-  cancelTerminalPayment, clearTerminalDisplay, startTerminalPayment, TerminalFlowError,
+  cancelTerminalPayment, clearTerminalDisplay, reconcileTerminalPayment, startTerminalPayment, TerminalFlowError,
 } from "@worker/services/terminal-payment";
 import type { WorkerEnvironment } from "@worker/types";
-import { deliverPaidTransactionReceipt, queueReceiptResend } from "@worker/services/receipt-delivery";
+import { deliverPaidTransactionNotifications, deliverPaidTransactionReceipt, queueReceiptResend } from "@worker/services/receipt-delivery";
 import { emailDeliveryConfigured } from "@worker/services/resend-email";
 
 export const transactionRoutes = new Hono<WorkerEnvironment>();
@@ -118,6 +118,25 @@ transactionRoutes.post("/:id/payment-attempts", async (c) => {
   if (!db) return c.json({ error: "Terminal payment storage is not configured" }, 503);
   try {
     return c.json(await startTerminalPayment({ db, env: c.env, transactionId: c.req.param("id") }));
+  } catch (error) {
+    if (error instanceof TerminalFlowError) return c.json({ error: error.message, code: error.code }, error.status);
+    throw error;
+  }
+});
+
+transactionRoutes.post("/:id/payment-attempts/reconcile", async (c) => {
+  const db = createDatabase(c.env);
+  if (!db) return c.json({ error: "Terminal payment storage is not configured" }, 503);
+  try {
+    const result = await reconcileTerminalPayment({ db, env: c.env, transactionId: c.req.param("id") });
+    if (result.paymentStatus === "PAID") {
+      c.executionCtx.waitUntil(deliverPaidTransactionNotifications({
+        db,
+        env: c.env,
+        transactionId: result.transactionId,
+      }).then(() => undefined));
+    }
+    return c.json(result);
   } catch (error) {
     if (error instanceof TerminalFlowError) return c.json({ error: error.message, code: error.code }, error.status);
     throw error;

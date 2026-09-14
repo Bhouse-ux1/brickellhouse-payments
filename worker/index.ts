@@ -7,7 +7,8 @@ import { adminRoutes } from "@worker/routes/admin";
 import { webhookRoutes } from "@worker/routes/webhooks";
 import { isApprovedLiveStripeKey } from "@worker/services/stripe-client";
 import { runScheduledDatabaseKeepalive } from "@worker/services/database-keepalive";
-import { expireAbandonedReaderDisplays } from "@worker/services/terminal-payment";
+import { expireAbandonedReaderDisplays, reconcileOpenTerminalPayments } from "@worker/services/terminal-payment";
+import { deliverPendingReceipts } from "@worker/services/receipt-delivery";
 import { productionAuthConfigured } from "@worker/services/production-auth";
 import type { WorkerEnvironment } from "@worker/types";
 
@@ -42,6 +43,8 @@ const app = createApp();
 export function createScheduledHandler(
   keepalive: (env: WorkerEnvironment["Bindings"]) => Promise<void> = runScheduledDatabaseKeepalive,
   expireDisplays: (input: { env: WorkerEnvironment["Bindings"] }) => Promise<unknown> = expireAbandonedReaderDisplays,
+  reconcilePayments: (input: { env: WorkerEnvironment["Bindings"] }) => Promise<unknown> = reconcileOpenTerminalPayments,
+  deliverEmails: (env: WorkerEnvironment["Bindings"]) => Promise<unknown> = deliverPendingReceipts,
 ) {
   return function scheduled(
     controller: ScheduledController,
@@ -53,7 +56,11 @@ export function createScheduledHandler(
       return;
     }
     if (controller.cron === "* * * * *") {
-      ctx.waitUntil(expireDisplays({ env }).then(() => undefined));
+      ctx.waitUntil(Promise.allSettled([
+        expireDisplays({ env }),
+        reconcilePayments({ env }),
+        deliverEmails(env),
+      ]).then(() => undefined));
     }
   };
 }

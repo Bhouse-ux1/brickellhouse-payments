@@ -1,6 +1,6 @@
 # BrickellHouse Payments
 
-BrickellHouse Payments is the standalone employee payment website for the physical Stripe S710 at BrickellHouse. React and Hono run on Cloudflare Workers, Neon PostgreSQL is reached through Hyperdrive, Stripe Terminal uses the server-driven API, Better Auth provides employee access, and Resend delivers authentication messages and verified-payment receipts.
+BrickellHouse Payments is the standalone employee payment website for the physical Stripe S710 at BrickellHouse. React and Hono run on Cloudflare Workers, Supabase PostgreSQL is reached through Hyperdrive, Stripe Terminal uses the server-driven API, Better Auth provides employee access, and Resend delivers authentication messages and verified-payment receipts.
 
 ## Production safety boundary
 
@@ -16,7 +16,7 @@ Deployment and page loads never initiate a payment. A live card charge begins on
 
 ## Employee authentication
 
-Authentication is self-hosted Better Auth using the existing Neon/Drizzle user, account, session, and verification tables. Managed Neon Auth was not selected because it is not a drop-in replacement for this existing Better Auth schema and would introduce a second authentication system without the custom server controls required here.
+Authentication is self-hosted Better Auth using the existing Supabase/Drizzle user, account, session, and verification tables. Supabase Auth is not used because it is not a drop-in replacement for this existing Better Auth schema and would introduce a second authentication system without the custom server controls required here.
 
 - Email and password only; public signup is disabled.
 - Accounts must be created by an Admin. Roles are `ADMIN` and `STAFF`.
@@ -34,7 +34,7 @@ The temporary `TEST_ACCESS_PASSWORD` / `TEST_SESSION_SECRET` code and Cloudflare
 Keep the values below only in the ignored local `.env`; never commit them:
 
 ```text
-DATABASE_URL=<direct neondb_owner connection used only for migration/bootstrap>
+DATABASE_URL=<Supabase owner connection used only for bootstrap>
 BETTER_AUTH_SECRET=<at least 32 random bytes; same value as the Worker secret>
 BETTER_AUTH_URL=https://brickellhouse-payments.assistantmanager.workers.dev
 RESEND_API_KEY=<server-side Resend key>
@@ -91,4 +91,4 @@ npm run build
 npx wrangler deploy --dry-run
 ```
 
-`.env`, `.dev.vars`, `dist`, Wrangler state, and local build output are ignored. Production database access uses `env.HYPERDRIVE.connectionString`; the direct owner URL is for local migration/bootstrap only.
+`.env`, `.dev.vars`, `dist`, Wrangler state, and local build output are ignored. Production database access uses `env.HYPERDRIVE.connectionString`; the Supabase session-pooler owner URL is for local migration/bootstrap only.

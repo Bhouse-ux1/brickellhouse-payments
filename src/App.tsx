@@ -6,8 +6,10 @@ import {
 } from "lucide-react";
 import { calculateProcessingFee } from "@/domain/payments/processing-fee";
 import { meetsMinimumPayment, MINIMUM_PAYMENT_MESSAGE } from "@/domain/payments/minimum-payment";
+import { paymentActivationUi, paymentPhaseLabel } from "@/domain/payments/ui-state";
 import { productCatalog, type TrustedProduct } from "@/domain/products/catalog";
 import { MAX_QUANTITY, parseMoneyInput, parseQuantityInput } from "@/domain/transactions/validation";
+import "./payment-success.css";
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 type EmployeeRole = "ADMIN" | "STAFF";
@@ -64,7 +66,10 @@ function NewTransaction() {
   const [charging, setCharging] = useState(false);
   const [readerDisplayPending, setReaderDisplayPending] = useState(false);
   const [terminalCode, setTerminalCode] = useState<string | null>(null);
+  const [paymentStatus, setPaymentStatus] = useState("DRAFT");
+  const [completedPayment, setCompletedPayment] = useState<{ totalCents: number; cardBrand: string | null; cardLastFour: string | null } | null>(null);
   const requestInFlight = useRef(false);
+  const pollInFlight = useRef(false);
 
   useEffect(() => {
     if (preview) return;
@@ -85,15 +90,27 @@ function NewTransaction() {
     if (preview || !activeTransactionId) return;
     let stopped = false;
     async function refreshPayment() {
+      if (pollInFlight.current) return;
+      pollInFlight.current = true;
       try {
+        const reconciliation = await authenticatedFetch(`/api/transactions/${activeTransactionId}/payment-attempts/reconcile`, { method: "POST" });
+        const reconciliationData = await reconciliation.json().catch(() => ({})) as {
+          paymentStatus?: string; displayStatus?: string; readerDisplayPending?: boolean; code?: string; error?: string;
+        };
+        if (!stopped) {
+          if (reconciliationData.paymentStatus) setPaymentStatus(reconciliationData.paymentStatus);
+          if (typeof reconciliationData.readerDisplayPending === "boolean") setReaderDisplayPending(reconciliationData.readerDisplayPending);
+          if (!reconciliation.ok && reconciliationData.code) setTerminalCode(reconciliationData.code);
+        }
         const response = await authenticatedFetch(`/api/transactions/${activeTransactionId}`);
         if (!response.ok) return;
         const data = await response.json() as {
-          transaction: { unitNumber: string; customerEmail: string };
+          transaction: { unitNumber: string; customerEmail: string; totalCents: number; cardBrand: string | null; cardLastFour: string | null };
           items: Array<{ productId: string | null; productNameSnapshot: string; unitPriceCentsSnapshot: number; quantity: number }>;
           payment: { status: string; displayStatus: string; readerDisplayPending: boolean; recoveryRequired: boolean };
         };
         if (stopped) return;
+        setPaymentStatus(data.payment.status);
         setNotice(data.payment.recoveryRequired ? "Terminal state needs reconciliation—do not start another charge." : data.payment.displayStatus);
         setReaderDisplayPending(data.payment.readerDisplayPending);
         setTerminalCode(data.payment.recoveryRequired ? "ORPHANED_READER_RESERVATION" : null);
@@ -111,6 +128,12 @@ function NewTransaction() {
           setHydratedTransactionId(null);
           setReaderDisplayPending(false);
           if (data.payment.status === "PAID") {
+            setCompletedPayment({
+              totalCents: data.transaction.totalCents,
+              cardBrand: data.transaction.cardBrand,
+              cardLastFour: data.transaction.cardLastFour,
+            });
+            setNotice(`Payment successful — ${money.format(data.transaction.totalCents / 100)}`);
             setUnit("");
             setEmail("");
             setQuantities({});
@@ -119,6 +142,8 @@ function NewTransaction() {
         }
       } catch {
         if (!stopped) setNotice("Payment status is temporarily unavailable. Do not start another charge.");
+      } finally {
+        pollInFlight.current = false;
       }
     }
     void refreshPayment();
@@ -134,7 +159,9 @@ function NewTransaction() {
   const selected = catalog.filter((p) => quantities[p.id]);
   const amountCents = parseMoneyInput(amount);
   const hasRequiredDetails = Boolean(unit.trim() && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && (selected.length || custom));
-  const canCharge = hasRequiredDetails && meetsMinimumPayment(total);
+  const paymentUi = paymentActivationUi({ hasActiveTransaction: Boolean(activeTransactionId), paymentStatus, readerDisplayPending });
+  const canCharge = hasRequiredDetails && meetsMinimumPayment(total) && paymentUi.activationAllowed && !completedPayment;
+  const paymentPhase = paymentPhaseLabel(paymentStatus, Boolean(completedPayment));
 
   function change(product: CatalogProduct, delta: number) {
     if (activeTransactionId) return;
@@ -189,8 +216,9 @@ function NewTransaction() {
         setActiveTransactionId(transactionId);
       }
       const terminal = await authenticatedFetch(`/api/transactions/${transactionId}/payment-attempts`, { method: "POST" });
-      const terminalData = await terminal.json() as { displayStatus?: string; error?: string; code?: string; readerDisplayPending?: boolean };
+      const terminalData = await terminal.json() as { paymentStatus?: string; displayStatus?: string; error?: string; code?: string; readerDisplayPending?: boolean };
       if (typeof terminalData.readerDisplayPending === "boolean") setReaderDisplayPending(terminalData.readerDisplayPending);
+      if (terminalData.paymentStatus) setPaymentStatus(terminalData.paymentStatus);
       setTerminalCode(terminal.ok ? null : terminalData.code ?? null);
       setNotice(terminalData.displayStatus ?? terminalData.error ?? "Payment status is being checked. Do not start another charge.");
     } catch {
@@ -225,7 +253,8 @@ function NewTransaction() {
         </button>; })}</div>
       </section>
       <aside className="summary">
-        <div className="summaryHead"><div><span>Draft</span><h2>Current Transaction</h2></div><span>{selected.length + (custom ? 1 : 0)} {selected.length + (custom ? 1 : 0) === 1 ? "charge" : "charges"}</span></div>
+        <div className="summaryHead"><div><span>{paymentPhase}</span><h2>Current Transaction</h2></div><span>{selected.length + (custom ? 1 : 0)} {selected.length + (custom ? 1 : 0) === 1 ? "charge" : "charges"}</span></div>
+        {completedPayment && <div className="paymentSuccess" role="status"><ShieldCheck size={22}/><div><strong>Payment successful</strong><span>{money.format(completedPayment.totalCents / 100)}{completedPayment.cardBrand && completedPayment.cardLastFour ? ` · ${completedPayment.cardBrand} •••• ${completedPayment.cardLastFour}` : ""}</span></div><button onClick={() => { setCompletedPayment(null); setNotice(""); setPaymentStatus("DRAFT"); }}>New Transaction</button></div>}
         {(unit || email) && <div className="residentMini"><Building2 size={16}/><div><strong>{unit ? `Unit ${unit}` : "Unit pending"}</strong><small>{email || "Email pending"}</small></div></div>}
         <div className={selected.length || custom ? "lines" : "lines empty"}>
           {!selected.length && !custom && <div className="emptyState"><ReceiptText size={23}/><strong>No charges yet</strong><span>Select a product or add a custom charge.</span></div>}
@@ -234,7 +263,7 @@ function NewTransaction() {
         </div>
         <div className="totals"><div><span>Subtotal</span><b>{money.format(subtotal / 100)}</b></div><div><span>Processing fee</span><b>{money.format(fee / 100)}</b></div><div className="grand"><span>Total</span><b>{money.format(total / 100)}</b></div></div>
         {notice && <div className="notice" role="status">{notice}</div>}
-        <button className="charge" disabled={!canCharge || charging} onClick={prepareCharge}><CreditCard size={17}/>{charging ? "Preparing…" : readerDisplayPending ? "Start card payment" : total ? `Review ${money.format(total / 100)} on S710` : "Review on S710"}</button>
+        <button className="charge" disabled={!canCharge || charging} onClick={prepareCharge}><CreditCard size={17}/>{charging ? "Preparing…" : paymentStatus === "FAILED" ? "Retry card payment" : readerDisplayPending || paymentStatus === "READY" ? "Start card payment" : paymentStatus === "WAITING_FOR_CUSTOMER" ? "Waiting for card…" : paymentStatus === "PROCESSING" ? "Processing payment…" : total ? `Review ${money.format(total / 100)} on S710` : "Review on S710"}</button>
         {activeTransactionId && <button className="cancelPayment" disabled={charging} onClick={async () => {
           setCharging(true);
           try {
