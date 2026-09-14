@@ -89,7 +89,11 @@ async function setTrustedReaderDisplay(input: {
 
 export function classifyReaderAction(reader: Awaited<ReturnType<StripeTerminalClient["retrieveReader"]>>) {
   const paymentIntentId = readerIntentId(reader);
-  if (paymentIntentId || reader.action?.type === "process_payment_intent") return "PAYMENT_ACTIVE" as const;
+  if (paymentIntentId || reader.action?.type === "process_payment_intent") {
+    if (reader.action?.status === "in_progress") return "PAYMENT_ACTIVE" as const;
+    if (reader.action?.status === "succeeded" || reader.action?.status === "failed") return "IDLE" as const;
+    return "UNCERTAIN" as const;
+  }
   if (!reader.action) return "IDLE" as const;
   if (reader.action.type === "set_reader_display") return "CART_DISPLAY" as const;
   return "UNCERTAIN" as const;
@@ -150,11 +154,12 @@ export function decidePolledPaymentReconciliation(input: {
   }
   if (input.paymentIntentStatus === "canceled") return "CANCELED" as const;
   if (input.paymentIntentStatus === "processing") return "PROCESSING" as const;
+  if (input.readerPaymentIntentMatches && input.readerActionStatus === "failed") {
+    return input.readerFailureCode === "customer_canceled" ? "CANCELED" as const : "FAILED" as const;
+  }
+  if (input.readerPaymentIntentMatches && input.readerActionStatus === "succeeded") return "UNCERTAIN" as const;
   if (input.readerAction === "PAYMENT_ACTIVE" && input.readerPaymentIntentMatches) {
-    if (input.readerActionStatus === "failed") {
-      return input.readerFailureCode === "customer_canceled" ? "CANCELED" as const : "FAILED" as const;
-    }
-    if (input.readerActionStatus === "in_progress" || input.readerActionStatus === "succeeded") {
+    if (input.readerActionStatus === "in_progress") {
       return "WAITING" as const;
     }
   }

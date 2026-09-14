@@ -40,6 +40,14 @@ describe("Terminal payment recovery", () => {
     expect(classifyReaderAction(reader)).toBe("PAYMENT_ACTIVE");
   });
 
+  it("does not treat Stripe's retained completed reader action as still active", () => {
+    const reader = {
+      id: "tmr_live", object: "terminal.reader" as const, livemode: true, location: "tml_live",
+      action: { type: "process_payment_intent", status: "succeeded", process_payment_intent: { payment_intent: "pi_previous" } },
+    };
+    expect(classifyReaderAction(reader)).toBe("IDLE");
+  });
+
   it("stores at most one PaymentIntent and reader-operation identity per attempt", () => {
     expect(paymentAttempts.idempotencyKey.isUnique).toBe(true);
     expect(paymentAttempts.stripePaymentIntentId.isUnique).toBe(true);
