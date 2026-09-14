@@ -7,6 +7,7 @@ import { adminRoutes } from "@worker/routes/admin";
 import { webhookRoutes } from "@worker/routes/webhooks";
 import { isApprovedLiveStripeKey } from "@worker/services/stripe-client";
 import { runScheduledDatabaseKeepalive } from "@worker/services/database-keepalive";
+import { expireAbandonedReaderDisplays } from "@worker/services/terminal-payment";
 import { productionAuthConfigured } from "@worker/services/production-auth";
 import type { WorkerEnvironment } from "@worker/types";
 
@@ -18,6 +19,7 @@ export function createApp() {
     databaseConfigured: Boolean(c.env.HYPERDRIVE || c.env.DATABASE_URL),
     authenticationConfigured: productionAuthConfigured(c.env),
     terminalConfigured: Boolean(c.env.STRIPE_LIVE_MODE_ONLY === "true" && isApprovedLiveStripeKey(c.env.STRIPE_SECRET_KEY) && c.env.STRIPE_TERMINAL_READER_ID && c.env.STRIPE_TERMINAL_LOCATION_ID && c.env.STRIPE_TERMINAL_WEBHOOK_SECRET),
+    managementNotificationConfigured: Boolean(c.env.RESEND_API_KEY && c.env.PAYMENT_NOTIFICATION_EMAIL && /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(c.env.PAYMENT_NOTIFICATION_EMAIL)),
     stripeMode: "live-only",
   }));
   app.all("/api/auth/*", (c) => handleProductionAuthRequest(c.req.raw, c.env));
@@ -39,13 +41,20 @@ const app = createApp();
 
 export function createScheduledHandler(
   keepalive: (env: WorkerEnvironment["Bindings"]) => Promise<void> = runScheduledDatabaseKeepalive,
+  expireDisplays: (input: { env: WorkerEnvironment["Bindings"] }) => Promise<unknown> = expireAbandonedReaderDisplays,
 ) {
   return function scheduled(
-    _controller: ScheduledController,
+    controller: ScheduledController,
     env: WorkerEnvironment["Bindings"],
     ctx: ExecutionContext,
   ) {
-    ctx.waitUntil(keepalive(env));
+    if (controller.cron === "0 */6 * * *") {
+      ctx.waitUntil(keepalive(env));
+      return;
+    }
+    if (controller.cron === "* * * * *") {
+      ctx.waitUntil(expireDisplays({ env }).then(() => undefined));
+    }
   };
 }
 

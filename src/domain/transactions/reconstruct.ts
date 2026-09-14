@@ -1,4 +1,5 @@
 import { calculateProcessingFee } from "@/domain/payments/processing-fee";
+import { meetsMinimumPayment, MINIMUM_PAYMENT_MESSAGE } from "@/domain/payments/minimum-payment";
 import { trustedGlCodeForCustomCharge, trustedGlCodeForProduct } from "@/domain/accounting/gl-rules";
 import type { TrustedProduct } from "@/domain/products/catalog";
 import { checkoutRequestSchema } from "./validation";
@@ -61,12 +62,16 @@ export function reconstructTrustedTransaction(
 
   const subtotalCents = lines.reduce((sum, line) => sum + line.lineTotalCents, 0);
   const processingFeeCents = calculateProcessingFee(subtotalCents);
+  const totalCents = subtotalCents + processingFeeCents;
+  if (!meetsMinimumPayment(totalCents)) {
+    throw new FinancialValidationError("MINIMUM_PAYMENT", MINIMUM_PAYMENT_MESSAGE);
+  }
   return {
     unitNumber: request.unitNumber,
     customerEmail: request.customerEmail.toLowerCase(),
     lines,
     subtotalCents,
     processingFeeCents,
-    totalCents: subtotalCents + processingFeeCents,
+    totalCents,
   };
 }

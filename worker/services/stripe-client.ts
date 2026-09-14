@@ -110,6 +110,18 @@ export function validateReaderDisplayState(reader: StripeReader, expectedCart: S
   return action.status === "succeeded" ? "SUCCEEDED" : "PENDING";
 }
 
+export function validateReaderPaymentAction(reader: StripeReader, expectedPaymentIntentId: string): void {
+  const action = reader.action;
+  const reference = action?.process_payment_intent?.payment_intent;
+  const paymentIntentId = typeof reference === "string" ? reference : reference?.id;
+  if (action?.type !== "process_payment_intent" || paymentIntentId !== expectedPaymentIntentId) {
+    throw new Error("Reader action is linked to an unexpected PaymentIntent.");
+  }
+  if (action.status !== "in_progress" && action.status !== "succeeded") {
+    throw new Error("Reader did not acknowledge card collection.");
+  }
+}
+
 export function validateLivePaymentIntent(input: {
   paymentIntent: StripePaymentIntent;
   expectedPaymentIntentId?: string | null;

@@ -48,7 +48,11 @@ export async function reserveConfiguredReader(db: Database, env: ReaderEnvironme
       lockExpiresAt: reader.lock_expires_at,
       now,
     });
-    if (decision === "BUSY") return { status: "TERMINAL_BUSY" as const, retryAfter: reader.lock_expires_at };
+    if (decision === "BUSY") return {
+      status: "TERMINAL_BUSY" as const,
+      retryAfter: reader.lock_expires_at,
+      lockedPaymentAttemptId: reader.lock_payment_attempt_id,
+    };
     if (decision === "ACQUIRE") {
       await tx.update(terminalReaders).set({
         lockPaymentAttemptId: paymentAttemptId, lockAcquiredAt: now,

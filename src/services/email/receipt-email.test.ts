@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderReceiptEmail, validateTrustedReceipt } from "./receipt-email";
+import { renderManagementPaymentEmail, renderReceiptEmail, validateTrustedReceipt } from "./receipt-email";
 
 const trustedReceipt = {
   transactionNumber: "POS-000123",
@@ -18,12 +18,26 @@ const trustedReceipt = {
 describe("verified payment receipt", () => {
   it("renders trusted item snapshots, exact totals, fee, and safe card details", () => {
     const receipt = renderReceiptEmail(trustedReceipt);
-    expect(receipt.html).toContain("Thank for stopping by!");
-    expect(receipt.html).toContain("POS-000123");
+    expect(receipt.html).toContain("Thank you for stopping by!");
+    expect(receipt.html).not.toContain("POS-000123");
+    expect(receipt.text).not.toContain("POS-000123");
+    expect(receipt.subject).not.toContain("POS-000123");
     expect(receipt.html).toContain("$77.48");
     expect(receipt.html).toContain("Processing Fee");
     expect(receipt.html).toContain("Visa &bull;&bull;&bull;&bull; 1234");
+    expect(receipt.html).toContain("background:#f3efe6");
+    expect(receipt.html).toContain("BrickellHouse Management<br>305 400 9661 ext. 7002");
+    expect(receipt.html).not.toContain("border:1px solid");
     expect(receipt.html).not.toMatch(/PaymentIntent|reader|GL|database|webhook/iu);
+  });
+
+  it("renders an independent management confirmation with the safe internal reference", () => {
+    const confirmation = renderManagementPaymentEmail({ ...trustedReceipt, customerEmail: "resident@example.com" });
+    expect(confirmation.html).toContain("Payment confirmation");
+    expect(confirmation.html).toContain("POS-000123");
+    expect(confirmation.html).toContain("resident@example.com");
+    expect(confirmation.html).toContain("$77.48");
+    expect(confirmation.html).not.toMatch(/PaymentIntent|reader|GL|database|webhook|secret/iu);
   });
 
   it("escapes custom charge descriptions", () => {

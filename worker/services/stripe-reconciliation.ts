@@ -147,6 +147,7 @@ export async function processStripeEvent(input: {
         readerId,
         locationId,
         customerEmail: transaction.customerEmail,
+        managementNotificationEmail: input.env.PAYMENT_NOTIFICATION_EMAIL,
       });
     } else if (decision === "PROCESSING") {
       if (failureCode === "connection_error") {

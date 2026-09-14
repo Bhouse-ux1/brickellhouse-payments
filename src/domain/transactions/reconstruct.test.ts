@@ -56,7 +56,7 @@ describe("trusted transaction reconstruction", () => {
       const forged = productCatalog.map((item) => ({ ...item, glCode: "12345" }));
       const result = reconstructTrustedTransaction({
         unitNumber: "2305", customerEmail: "resident@example.com",
-        items: [{ productId: product.id, quantity: 1 }], customCharges: [],
+        items: [{ productId: product.id, quantity: product.id === "black_white_printing" ? 2 : 1 }], customCharges: [],
       }, forged);
       expect(result.lines[0].glCodeSnapshot).toBe(product.id === "valet_parking" ? "40033" : "40090");
     }
@@ -92,6 +92,21 @@ describe("trusted transaction reconstruction", () => {
     expect(parseQuantityInput("100")).toBeNull();
     expect(parseQuantityInput("2.5")).toBeNull();
     expect(parseQuantityInput("1e2")).toBeNull();
+  });
+
+  it("enforces the final $0.50 minimum below, at, and above the boundary", () => {
+    expect(() => reconstructTrustedTransaction({
+      unitNumber: "2305", customerEmail: "resident@example.com", items: [],
+      customCharges: [{ description: "Below minimum", amountCents: 18 }],
+    }, productCatalog)).toThrow("Minimum payment is $0.50.");
+    expect(reconstructTrustedTransaction({
+      unitNumber: "2305", customerEmail: "resident@example.com", items: [],
+      customCharges: [{ description: "Exact minimum", amountCents: 19 }],
+    }, productCatalog).totalCents).toBe(50);
+    expect(reconstructTrustedTransaction({
+      unitNumber: "2305", customerEmail: "resident@example.com", items: [],
+      customCharges: [{ description: "Above minimum", amountCents: 20 }],
+    }, productCatalog).totalCents).toBe(51);
   });
 });
 

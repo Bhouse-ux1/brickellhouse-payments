@@ -12,6 +12,7 @@ export type WorkerBindings = {
   STRIPE_TERMINAL_WEBHOOK_SECRET?: string;
   RESEND_API_KEY?: string;
   EMAIL_FROM?: string;
+  PAYMENT_NOTIFICATION_EMAIL?: string;
   ENVIRONMENT?: "development" | "staging" | "production";
 };
 

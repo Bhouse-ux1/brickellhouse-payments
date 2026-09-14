@@ -1,9 +1,10 @@
-import { and, desc, eq, isNull, lte } from "drizzle-orm";
+import { and, desc, eq, isNull, lte, ne, or } from "drizzle-orm";
 import { createDatabase, type Database } from "@/db/client";
 import { paymentAttempts, terminalReaders, transactionItems, transactions } from "@/db/schema";
-import { buildPaymentAttemptIdempotencyKey } from "@/domain/payments/idempotency";
+import { buildPaymentAttemptIdempotencyKey, buildReaderProcessIdempotencyKey } from "@/domain/payments/idempotency";
 import { buildTrustedReaderCart } from "@/domain/payments/reader-cart";
 import type { TrustedReaderCart } from "@/domain/payments/reader-cart";
+import { meetsMinimumPayment, MINIMUM_PAYMENT_MESSAGE } from "@/domain/payments/minimum-payment";
 import { employeePaymentStatus } from "@/domain/payments/status-display";
 import {
   extendReaderReservation, releaseReaderReservation, reserveConfiguredReader, syncConfiguredReader,
@@ -11,7 +12,7 @@ import {
 import { markPaymentFailed, markPaymentSucceeded } from "@worker/services/payment-reconciliation";
 import {
   createStripeTerminalClient, StripeApiError, stripeLiveConfigurationError,
-  validateLivePaymentIntent, validateLiveReader, validateReaderDisplayState,
+  validateLivePaymentIntent, validateLiveReader, validateReaderDisplayState, validateReaderPaymentAction,
 } from "@worker/services/stripe-client";
 import type { StripeReaderCart, StripeTerminalClient } from "@worker/services/stripe-client";
 import type { WorkerBindings } from "@worker/types";
@@ -123,6 +124,122 @@ async function claimDisplayedCartTransition(input: {
   return Boolean(claimed);
 }
 
+export function decideReaderDisplayRecovery(input: {
+  readerAction: ReturnType<typeof classifyReaderAction>;
+  hasPaymentIntent: boolean;
+}) {
+  if (input.hasPaymentIntent || input.readerAction === "PAYMENT_ACTIVE" || input.readerAction === "UNCERTAIN") {
+    return "REFUSE_UNCERTAIN" as const;
+  }
+  if (input.readerAction === "CART_DISPLAY") return "CLEAR_VERIFIED_CART" as const;
+  return "RELEASE_CONFIRMED_IDLE" as const;
+}
+
+export function shouldRecoverExpiredIdleReservation(input: {
+  lockExpiresAt: Date | null;
+  now: Date;
+  readerAction: ReturnType<typeof classifyReaderAction>;
+  attemptStatus: PaymentAttempt["status"];
+  hasPaymentIntent: boolean;
+  hasReaderOperation: boolean;
+}) {
+  return Boolean(
+    input.lockExpiresAt && input.lockExpiresAt.getTime() <= input.now.getTime() &&
+    input.readerAction === "IDLE" && input.attemptStatus === "READER_RESERVED" &&
+    !input.hasPaymentIntent && !input.hasReaderOperation,
+  );
+}
+
+async function recoverExpiredIdleReservation(input: {
+  db: Database;
+  env: WorkerBindings;
+  stripe?: StripeTerminalClient;
+  lockedPaymentAttemptId: string | null;
+  lockExpiresAt: Date | null;
+  now?: Date;
+}) {
+  const now = input.now ?? new Date();
+  if (!input.lockedPaymentAttemptId || !input.lockExpiresAt || input.lockExpiresAt.getTime() > now.getTime()) return false;
+  const [locked] = await input.db.select({
+    attemptStatus: paymentAttempts.status,
+    transactionId: paymentAttempts.transactionId,
+    stripePaymentIntentId: paymentAttempts.stripePaymentIntentId,
+    stripeReaderOperationId: paymentAttempts.stripeReaderOperationId,
+  }).from(paymentAttempts).where(eq(paymentAttempts.id, input.lockedPaymentAttemptId)).limit(1);
+  if (!locked) return false;
+  try {
+    const stripe = input.stripe ?? createStripeTerminalClient(input.env);
+    const reader = await stripe.retrieveReader(input.env.STRIPE_TERMINAL_READER_ID!);
+    validateLiveReader(reader, input.env.STRIPE_TERMINAL_READER_ID!, input.env.STRIPE_TERMINAL_LOCATION_ID!);
+    if (!shouldRecoverExpiredIdleReservation({
+      lockExpiresAt: input.lockExpiresAt,
+      now,
+      readerAction: classifyReaderAction(reader),
+      attemptStatus: locked.attemptStatus,
+      hasPaymentIntent: Boolean(locked.stripePaymentIntentId),
+      hasReaderOperation: Boolean(locked.stripeReaderOperationId),
+    })) return false;
+
+    return input.db.transaction(async (tx) => {
+      const [released] = await tx.update(terminalReaders).set({
+        lockPaymentAttemptId: null,
+        lockAcquiredAt: null,
+        lockExpiresAt: null,
+        updatedAt: now,
+      }).where(and(
+        eq(terminalReaders.lockPaymentAttemptId, input.lockedPaymentAttemptId!),
+        lte(terminalReaders.lockExpiresAt, now),
+      )).returning({ id: terminalReaders.id });
+      if (!released) return false;
+      const [expired] = await tx.update(paymentAttempts).set({
+        status: "EXPIRED",
+        completedAt: now,
+        lastErrorCode: "stale_reader_reservation_recovered",
+        lastErrorMessage: "Expired database reservation released after Stripe confirmed the reader was idle.",
+        updatedAt: now,
+      }).where(and(
+        eq(paymentAttempts.id, input.lockedPaymentAttemptId!),
+        eq(paymentAttempts.status, "READER_RESERVED"),
+        isNull(paymentAttempts.stripePaymentIntentId),
+        isNull(paymentAttempts.stripeReaderOperationId),
+      )).returning({ id: paymentAttempts.id });
+      if (!expired) throw new Error("Stale reader reservation changed during recovery.");
+      await tx.update(transactions).set({
+        paymentStatus: "CANCELED",
+        updatedAt: now,
+      }).where(and(
+        eq(transactions.id, locked.transactionId),
+        ne(transactions.paymentStatus, "PAID"),
+        isNull(transactions.stripePaymentIntentId),
+      ));
+      return true;
+    });
+  } catch (error) {
+    console.error("Expired reader reservation was not released", {
+      paymentAttemptId: input.lockedPaymentAttemptId,
+      message: error instanceof Error ? error.message : "Unknown reservation recovery failure",
+    });
+    return false;
+  }
+}
+
+async function claimReaderProcessTransition(input: { db: Database; attemptId: string }) {
+  const [claimed] = await input.db.update(paymentAttempts).set({
+    status: "SENT_TO_READER",
+    lastErrorCode: "READER_PROCESS_STARTING",
+    lastErrorMessage: null,
+    updatedAt: new Date(),
+  }).where(and(
+    eq(paymentAttempts.id, input.attemptId),
+    or(
+      and(eq(paymentAttempts.status, "PAYMENT_INTENT_CREATED"), isNull(paymentAttempts.lastErrorCode)),
+      eq(paymentAttempts.status, "FAILED"),
+    ),
+    isNull(paymentAttempts.stripeReaderOperationId),
+  )).returning({ id: paymentAttempts.id });
+  return Boolean(claimed);
+}
+
 export async function startTerminalPayment(input: {
   db: Database;
   env: WorkerBindings;
@@ -153,6 +270,9 @@ export async function startTerminalPayment(input: {
     throw new TerminalFlowError("PAYMENT_DETAILS_INVALID", "Unable to start payment", 409);
   }
   const paymentAmountCents = readerCart.totalCents;
+  if (!meetsMinimumPayment(paymentAmountCents)) {
+    throw new TerminalFlowError("MINIMUM_PAYMENT", MINIMUM_PAYMENT_MESSAGE, 400);
+  }
 
   await syncConfiguredReader(input.db, input.env);
   let attempt = await getOrCreatePaymentAttempt(input.db, transaction);
@@ -160,18 +280,38 @@ export async function startTerminalPayment(input: {
   const resumingDisplayedCart = !attempt.stripePaymentIntentId &&
     !attempt.lastErrorCode && attempt.status === "READER_RESERVED" && transaction.paymentStatus === "SENDING_TO_TERMINAL";
 
-  const reservation = await reserveConfiguredReader(input.db, input.env, attempt.id);
+  let reservation = await reserveConfiguredReader(input.db, input.env, attempt.id);
   if (reservation.status === "TERMINAL_OFFLINE") {
     await input.db.update(transactions).set({ paymentStatus: "TERMINAL_OFFLINE", updatedAt: new Date() }).where(eq(transactions.id, transaction.id));
     throw new TerminalFlowError("TERMINAL_OFFLINE", employeePaymentStatus.TERMINAL_OFFLINE, 503);
   }
   if (reservation.status === "TERMINAL_BUSY") {
-    await input.db.update(transactions).set({ paymentStatus: "TERMINAL_BUSY", updatedAt: new Date() }).where(eq(transactions.id, transaction.id));
-    throw new TerminalFlowError("TERMINAL_BUSY", employeePaymentStatus.TERMINAL_BUSY, 409);
+    const recovered = await recoverExpiredIdleReservation({
+      db: input.db,
+      env: input.env,
+      stripe: input.stripe,
+      lockedPaymentAttemptId: reservation.lockedPaymentAttemptId,
+      lockExpiresAt: reservation.retryAfter,
+    });
+    if (recovered) reservation = await reserveConfiguredReader(input.db, input.env, attempt.id);
+    if (reservation.status === "TERMINAL_BUSY") {
+      await input.db.update(transactions).set({ paymentStatus: "TERMINAL_BUSY", updatedAt: new Date() }).where(eq(transactions.id, transaction.id));
+      throw new TerminalFlowError("DATABASE_READER_RESERVED", "Terminal reserved by another transaction", 409);
+    }
+    if (reservation.status === "TERMINAL_OFFLINE") {
+      throw new TerminalFlowError("TERMINAL_OFFLINE", employeePaymentStatus.TERMINAL_OFFLINE, 503);
+    }
   }
   const internalReaderId = reservation.readerId;
   if (!attempt.stripePaymentIntentId) {
-    await input.db.update(paymentAttempts).set({ status: "READER_RESERVED", terminalReaderId: internalReaderId, updatedAt: new Date() })
+    await input.db.update(paymentAttempts).set({
+      status: "READER_RESERVED",
+      terminalReaderId: internalReaderId,
+      lastErrorCode: null,
+      lastErrorMessage: null,
+      completedAt: null,
+      updatedAt: new Date(),
+    })
       .where(eq(paymentAttempts.id, attempt.id));
   }
 
@@ -211,8 +351,15 @@ export async function startTerminalPayment(input: {
 
   if (!attempt.stripePaymentIntentId && !resumingDisplayedCart) {
     try {
-      if (classifyReaderAction(stripeReader) !== "IDLE") {
-        throw new TerminalFlowError("TERMINAL_BUSY", employeePaymentStatus.TERMINAL_BUSY, 409);
+      const existingReaderAction = classifyReaderAction(stripeReader);
+      if (existingReaderAction === "CART_DISPLAY") {
+        throw new TerminalFlowError("TERMINAL_CART_ACTIVE", "Terminal cart review is already active", 409);
+      }
+      if (existingReaderAction === "PAYMENT_ACTIVE") {
+        throw new TerminalFlowError("PAYMENT_ACTIVE", "Payment in progress—do not retry", 409);
+      }
+      if (existingReaderAction !== "IDLE") {
+        throw new TerminalFlowError("TERMINAL_UNCERTAIN", "Terminal state is being reconciled—do not retry", 503);
       }
       await setTrustedReaderDisplay({
         stripe,
@@ -222,16 +369,28 @@ export async function startTerminalPayment(input: {
         cart: readerCart,
       });
       const now = new Date();
-      await input.db.update(paymentAttempts).set({
+      const [displayRecorded] = await input.db.update(paymentAttempts).set({
         status: "READER_RESERVED", terminalReaderId: internalReaderId,
         lastErrorCode: null, lastErrorMessage: null, updatedAt: now,
-      }).where(eq(paymentAttempts.id, attempt.id));
+      }).where(and(
+        eq(paymentAttempts.id, attempt.id),
+        eq(paymentAttempts.status, "READER_RESERVED"),
+        isNull(paymentAttempts.stripePaymentIntentId),
+        isNull(paymentAttempts.lastErrorCode),
+      )).returning({ id: paymentAttempts.id });
+      if (!displayRecorded) {
+        await stripe.cancelReaderAction({
+          readerId: input.env.STRIPE_TERMINAL_READER_ID!,
+          idempotencyKey: `${attempt.idempotencyKey}:superseded-display`,
+        });
+        throw new TerminalFlowError("TERMINAL_UNCERTAIN", "Terminal state changed during setup—do not retry", 503);
+      }
       await input.db.update(transactions).set({ paymentStatus: "SENDING_TO_TERMINAL", updatedAt: now })
         .where(eq(transactions.id, transaction.id));
       await extendReaderReservation(input.db, internalReaderId, attempt.id);
       return view(transaction.id, "SENDING_TO_TERMINAL");
     } catch (error) {
-      if (error instanceof TerminalFlowError && error.code === "TERMINAL_BUSY") {
+      if (error instanceof TerminalFlowError) {
         await releaseReaderReservation(input.db, attempt.id);
         throw error;
       }
@@ -299,6 +458,7 @@ export async function startTerminalPayment(input: {
         db: input.db, transactionId: transaction.id, paymentAttemptId: attempt.id,
         paymentIntent, readerId: stripeReader.id, locationId: input.env.STRIPE_TERMINAL_LOCATION_ID!,
         customerEmail: transaction.customerEmail,
+        managementNotificationEmail: input.env.PAYMENT_NOTIFICATION_EMAIL,
       });
       return view(transaction.id, "PAID");
     }
@@ -332,14 +492,20 @@ export async function startTerminalPayment(input: {
     attempt = { ...attempt, stripePaymentIntentId: paymentIntent.id, status: "PAYMENT_INTENT_CREATED" };
   }
 
+  const processClaimed = await claimReaderProcessTransition({ db: input.db, attemptId: attempt.id });
+  if (!processClaimed) {
+    return view(transaction.id, "WAITING_FOR_CUSTOMER");
+  }
+  attempt = { ...attempt, status: "SENT_TO_READER", lastErrorCode: "READER_PROCESS_STARTING" };
+
   try {
     const processedReader = await stripe.processPaymentIntent({
       readerId: input.env.STRIPE_TERMINAL_READER_ID!,
       paymentIntentId: paymentIntent.id,
-      idempotencyKey: `${attempt.idempotencyKey}:reader`,
+      idempotencyKey: buildReaderProcessIdempotencyKey(attempt.idempotencyKey),
     });
     validateLiveReader(processedReader, input.env.STRIPE_TERMINAL_READER_ID!, input.env.STRIPE_TERMINAL_LOCATION_ID!);
-    if (readerIntentId(processedReader) !== paymentIntent.id) throw new Error("Reader action is linked to an unexpected PaymentIntent.");
+    validateReaderPaymentAction(processedReader, paymentIntent.id);
     await input.db.update(paymentAttempts).set({
       status: "WAITING_FOR_CUSTOMER", stripeReaderOperationId: `${processedReader.id}:${paymentIntent.id}`, updatedAt: new Date(),
       lastErrorCode: null, lastErrorMessage: null,
@@ -399,6 +565,7 @@ export async function cancelTerminalPayment(input: {
       db: input.db, transactionId: transaction.id, paymentAttemptId: attempt.id,
       paymentIntent, readerId: reader.id, locationId: input.env.STRIPE_TERMINAL_LOCATION_ID!,
       customerEmail: transaction.customerEmail,
+      managementNotificationEmail: input.env.PAYMENT_NOTIFICATION_EMAIL,
     });
     return view(transaction.id, "PAID");
   }
@@ -415,6 +582,7 @@ export async function cancelTerminalPayment(input: {
         db: input.db, transactionId: transaction.id, paymentAttemptId: attempt.id,
         paymentIntent, readerId: reader.id, locationId: input.env.STRIPE_TERMINAL_LOCATION_ID!,
         customerEmail: transaction.customerEmail,
+        managementNotificationEmail: input.env.PAYMENT_NOTIFICATION_EMAIL,
       });
       return view(transaction.id, "PAID");
     }
@@ -444,7 +612,7 @@ export async function clearTerminalDisplay(input: {
   if (transaction.paymentStatus === "PAID" || transaction.stripePaymentIntentId || attempt.stripePaymentIntentId) {
     throw new TerminalFlowError("PAYMENT_ACTIVE", "Payment status is being checked. The terminal was not cleared.", 409);
   }
-  if (transaction.paymentStatus !== "SENDING_TO_TERMINAL" || attempt.status !== "READER_RESERVED") {
+  if (attempt.status !== "READER_RESERVED") {
     throw new TerminalFlowError("DISPLAY_NOT_ACTIVE", "No terminal display is waiting to be cleared", 409);
   }
 
@@ -464,23 +632,30 @@ export async function clearTerminalDisplay(input: {
   if (!claimed) {
     throw new TerminalFlowError("TERMINAL_BUSY", "Another terminal action is already in progress", 409);
   }
-  const stripe = input.stripe ?? createStripeTerminalClient(input.env);
-  const reader = await stripe.retrieveReader(input.env.STRIPE_TERMINAL_READER_ID!);
-  validateLiveReader(reader, input.env.STRIPE_TERMINAL_READER_ID!, input.env.STRIPE_TERMINAL_LOCATION_ID!);
-  const readerAction = classifyReaderAction(reader);
-  if (readerAction === "PAYMENT_ACTIVE" || readerAction === "UNCERTAIN") {
-    throw new TerminalFlowError("PAYMENT_ACTIVE", "Payment status is being checked. The terminal was not cleared.", 409);
-  }
-  if (readerAction === "CART_DISPLAY") {
-    validateReaderDisplayState(reader, trustedCart);
-    const clearedReader = await stripe.cancelReaderAction({
-      readerId: reader.id,
-      idempotencyKey: `${attempt.idempotencyKey}:${input.reason ?? "employee_abandoned"}`,
-    });
-    validateLiveReader(clearedReader, input.env.STRIPE_TERMINAL_READER_ID!, input.env.STRIPE_TERMINAL_LOCATION_ID!);
-    if (classifyReaderAction(clearedReader) !== "IDLE") {
-      throw new TerminalFlowError("TERMINAL_UNCERTAIN", "The terminal state could not be confirmed. Do not start another charge.", 503);
+  try {
+    const stripe = input.stripe ?? createStripeTerminalClient(input.env);
+    const reader = await stripe.retrieveReader(input.env.STRIPE_TERMINAL_READER_ID!);
+    validateLiveReader(reader, input.env.STRIPE_TERMINAL_READER_ID!, input.env.STRIPE_TERMINAL_LOCATION_ID!);
+    const readerAction = classifyReaderAction(reader);
+    const recovery = decideReaderDisplayRecovery({ readerAction, hasPaymentIntent: false });
+    if (recovery === "REFUSE_UNCERTAIN") {
+      throw new TerminalFlowError("PAYMENT_ACTIVE", "Payment in progress—do not retry. The terminal was not cleared.", 409);
     }
+    if (recovery === "CLEAR_VERIFIED_CART") {
+      validateReaderDisplayState(reader, trustedCart);
+      const clearedReader = await stripe.cancelReaderAction({
+        readerId: reader.id,
+        idempotencyKey: `${attempt.idempotencyKey}:${input.reason ?? "employee_abandoned"}`,
+      });
+      validateLiveReader(clearedReader, input.env.STRIPE_TERMINAL_READER_ID!, input.env.STRIPE_TERMINAL_LOCATION_ID!);
+      if (classifyReaderAction(clearedReader) !== "IDLE") {
+        throw new TerminalFlowError("TERMINAL_UNCERTAIN", "Terminal state is being reconciled—do not retry", 503);
+      }
+    }
+  } catch (error) {
+    await input.db.update(paymentAttempts).set({ lastErrorCode: null, lastErrorMessage: null })
+      .where(and(eq(paymentAttempts.id, attempt.id), eq(paymentAttempts.lastErrorCode, "DISPLAY_CLEARING"), isNull(paymentAttempts.stripePaymentIntentId)));
+    throw error;
   }
   const reason = input.reason ?? "employee_abandoned";
   await markPaymentFailed({
@@ -505,7 +680,6 @@ export async function expireAbandonedReaderDisplays(input: {
   const cutoff = new Date((input.now ?? new Date()).getTime() - READER_DISPLAY_TIMEOUT_MS);
   const candidates = await db.select({ transactionId: transactions.id }).from(paymentAttempts)
     .innerJoin(transactions, eq(transactions.id, paymentAttempts.transactionId))
-    .innerJoin(terminalReaders, eq(terminalReaders.lockPaymentAttemptId, paymentAttempts.id))
     .where(and(
       eq(paymentAttempts.status, "READER_RESERVED"),
       isNull(paymentAttempts.stripePaymentIntentId),

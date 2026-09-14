@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { classifyReaderAction, decideExistingPaymentIntentAction, READER_DISPLAY_TIMEOUT_MS } from "./terminal-payment";
+import { paymentAttempts } from "@/db/schema";
+import { classifyReaderAction, decideExistingPaymentIntentAction, decideReaderDisplayRecovery, READER_DISPLAY_TIMEOUT_MS, shouldRecoverExpiredIdleReservation } from "./terminal-payment";
 
 describe("Terminal payment recovery", () => {
   it("does not process a duplicate Charge click while the reader is active", () => {
@@ -34,5 +35,36 @@ describe("Terminal payment recovery", () => {
       action: { type: "process_payment_intent", status: "in_progress", process_payment_intent: { payment_intent: "pi_live" } },
     };
     expect(classifyReaderAction(reader)).toBe("PAYMENT_ACTIVE");
+  });
+
+  it("stores at most one PaymentIntent and reader-operation identity per attempt", () => {
+    expect(paymentAttempts.idempotencyKey.isUnique).toBe(true);
+    expect(paymentAttempts.stripePaymentIntentId.isUnique).toBe(true);
+    expect(paymentAttempts.stripeReaderOperationId.isUnique).toBe(true);
+  });
+
+  it("releases an orphan only after Stripe confirms idle and refuses uncertain payment state", () => {
+    expect(decideReaderDisplayRecovery({ readerAction: "IDLE", hasPaymentIntent: false })).toBe("RELEASE_CONFIRMED_IDLE");
+    expect(decideReaderDisplayRecovery({ readerAction: "CART_DISPLAY", hasPaymentIntent: false })).toBe("CLEAR_VERIFIED_CART");
+    expect(decideReaderDisplayRecovery({ readerAction: "IDLE", hasPaymentIntent: true })).toBe("REFUSE_UNCERTAIN");
+    expect(decideReaderDisplayRecovery({ readerAction: "PAYMENT_ACTIVE", hasPaymentIntent: false })).toBe("REFUSE_UNCERTAIN");
+    expect(decideReaderDisplayRecovery({ readerAction: "UNCERTAIN", hasPaymentIntent: false })).toBe("REFUSE_UNCERTAIN");
+  });
+
+  it("recovers only an expired, idle, PaymentIntent-free database reservation", () => {
+    const now = new Date("2026-09-14T12:00:00Z");
+    const safe = {
+      lockExpiresAt: new Date("2026-09-14T11:59:00Z"),
+      now,
+      readerAction: "IDLE" as const,
+      attemptStatus: "READER_RESERVED" as const,
+      hasPaymentIntent: false,
+      hasReaderOperation: false,
+    };
+    expect(shouldRecoverExpiredIdleReservation(safe)).toBe(true);
+    expect(shouldRecoverExpiredIdleReservation({ ...safe, lockExpiresAt: new Date("2026-09-14T12:01:00Z") })).toBe(false);
+    expect(shouldRecoverExpiredIdleReservation({ ...safe, readerAction: "PAYMENT_ACTIVE" })).toBe(false);
+    expect(shouldRecoverExpiredIdleReservation({ ...safe, hasPaymentIntent: true })).toBe(false);
+    expect(shouldRecoverExpiredIdleReservation({ ...safe, hasReaderOperation: true })).toBe(false);
   });
 });

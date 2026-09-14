@@ -3,7 +3,7 @@ import { verifyStripeWebhookSignature } from "@worker/services/stripe-webhook";
 import { createDatabase } from "@/db/client";
 import { processStripeEvent } from "@worker/services/stripe-reconciliation";
 import { stripeLiveConfigurationError } from "@worker/services/stripe-client";
-import { deliverPaidTransactionReceipt } from "@worker/services/receipt-delivery";
+import { deliverPaidTransactionNotifications } from "@worker/services/receipt-delivery";
 import type { WorkerEnvironment } from "@worker/types";
 
 export const webhookRoutes = new Hono<WorkerEnvironment>();
@@ -28,7 +28,7 @@ webhookRoutes.post("/stripe", async (c) => {
   try {
     const result = await processStripeEvent({ db, env: c.env, rawBody, event });
     if ("paidTransactionId" in result && result.paidTransactionId) {
-      c.executionCtx.waitUntil(deliverPaidTransactionReceipt({ db, env: c.env, transactionId: result.paidTransactionId }));
+      c.executionCtx.waitUntil(deliverPaidTransactionNotifications({ db, env: c.env, transactionId: result.paidTransactionId }).then(() => undefined));
     }
     return c.json({ received: result.received, duplicate: "duplicate" in result ? result.duplicate : undefined, ignored: "ignored" in result ? result.ignored : undefined });
   } catch (error) {

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createStripeTerminalClient, stripeLiveConfigurationError,
-  validateLivePaymentIntent, validateLiveReader, validateReaderDisplayState,
+  validateLivePaymentIntent, validateLiveReader, validateReaderDisplayState, validateReaderPaymentAction,
 } from "./stripe-client";
 
 const liveEnv = {
@@ -162,5 +162,15 @@ describe("live Stripe boundary", () => {
     const client = createStripeTerminalClient(liveEnv, fetcher as typeof fetch);
     await client.processPaymentIntent({ readerId: "tmr_live", paymentIntentId: "pi_live", idempotencyKey: "stable-attempt-key:reader" });
     expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it("shows the terminal as ready only after Stripe acknowledges the exact reader action", () => {
+    const reader = {
+      id: "tmr_live", object: "terminal.reader" as const, livemode: true, location: "tml_live",
+      action: { type: "process_payment_intent", status: "in_progress", process_payment_intent: { payment_intent: "pi_live" } },
+    };
+    expect(() => validateReaderPaymentAction(reader, "pi_live")).not.toThrow();
+    expect(() => validateReaderPaymentAction({ ...reader, action: { ...reader.action, process_payment_intent: { payment_intent: "pi_other" } } }, "pi_live")).toThrow(/unexpected/u);
+    expect(() => validateReaderPaymentAction({ ...reader, action: { ...reader.action, status: "failed" } }, "pi_live")).toThrow(/acknowledge/u);
   });
 });

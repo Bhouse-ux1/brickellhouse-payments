@@ -11,6 +11,28 @@ function safeCardDetails(intent: StripePaymentIntent) {
   return { chargeId: charge?.id ?? null, brand, lastFour };
 }
 
+export function buildPaidDeliveryRows(input: {
+  transactionId: string;
+  customerEmail: string;
+  managementNotificationEmail?: string;
+}): Array<typeof emailDeliveries.$inferInsert> {
+  const deliveries: Array<typeof emailDeliveries.$inferInsert> = [{
+    transactionId: input.transactionId,
+    kind: "RESIDENT_RECEIPT",
+    recipientEmail: input.customerEmail,
+    status: "PENDING",
+  }];
+  if (input.managementNotificationEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(input.managementNotificationEmail)) {
+    deliveries.push({
+      transactionId: input.transactionId,
+      kind: "MANAGEMENT_PAYMENT_CONFIRMATION",
+      recipientEmail: input.managementNotificationEmail,
+      status: "PENDING",
+    });
+  }
+  return deliveries;
+}
+
 export async function markPaymentSucceeded(input: {
   db: Database;
   transactionId: string;
@@ -19,6 +41,7 @@ export async function markPaymentSucceeded(input: {
   readerId: string;
   locationId: string;
   customerEmail: string;
+  managementNotificationEmail?: string;
   now?: Date;
 }) {
   const now = input.now ?? new Date();
@@ -32,12 +55,8 @@ export async function markPaymentSucceeded(input: {
       stripeReaderId: input.readerId, stripeLocationId: input.locationId,
       cardBrand: card.brand, cardLastFour: card.lastFour, updatedAt: now,
     }).where(and(eq(transactions.id, input.transactionId), ne(transactions.paymentStatus, "PAID")));
-    await tx.insert(emailDeliveries).values({
-      transactionId: input.transactionId,
-      recipientEmail: input.customerEmail,
-      status: "PENDING",
-      lastError: "Receipt delivery is not configured.",
-    }).onConflictDoNothing();
+    const deliveries = buildPaidDeliveryRows(input);
+    await tx.insert(emailDeliveries).values(deliveries).onConflictDoNothing();
     await tx.update(terminalReaders).set({
       lockPaymentAttemptId: null, lockAcquiredAt: null, lockExpiresAt: null, updatedAt: now,
     }).where(eq(terminalReaders.lockPaymentAttemptId, input.paymentAttemptId));

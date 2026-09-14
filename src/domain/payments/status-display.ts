@@ -1,8 +1,8 @@
 export const employeePaymentStatus = {
   DRAFT: "Ready",
   READY: "Ready",
-  SENDING_TO_TERMINAL: "Review the payment details on the S710, then start card payment",
-  WAITING_FOR_CUSTOMER: "Waiting for payment",
+  SENDING_TO_TERMINAL: "Review the details on the S710. Card is not ready yet—then press Start card payment",
+  WAITING_FOR_CUSTOMER: "S710 ready—tap, insert, or swipe once",
   PROCESSING: "Processing payment",
   PAID: "Payment successful",
   FAILED: "Payment declined",

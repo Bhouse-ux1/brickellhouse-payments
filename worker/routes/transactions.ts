@@ -1,9 +1,10 @@
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { ZodError } from "zod";
 import { createDatabase } from "@/db/client";
 import { emailDeliveries, paymentAttempts, transactionItems, transactions } from "@/db/schema";
 import { employeePaymentStatus } from "@/domain/payments/status-display";
+import { FinancialValidationError } from "@/domain/transactions/reconstruct";
 import { createDraftTransaction } from "@/services/transactions/create-draft";
 import { requireEmployee } from "@worker/middleware/require-employee";
 import {
@@ -31,7 +32,7 @@ transactionRoutes.get("/", async (c) => {
     )`,
     receiptStatus: sql<string | null>`(
       select ed.status from email_deliveries ed
-      where ed.transaction_id = ${transactions.id} limit 1
+      where ed.transaction_id = ${transactions.id} and ed.kind = 'RESIDENT_RECEIPT' limit 1
     )`,
   }).from(transactions).orderBy(desc(transactions.createdAt)).limit(100);
   return c.json({ transactions: rows });
@@ -65,13 +66,14 @@ transactionRoutes.get("/:id", async (c) => {
   const [paymentAttempt] = await db.select({
     status: paymentAttempts.status,
     lastErrorCode: paymentAttempts.lastErrorCode,
+    stripePaymentIntentId: paymentAttempts.stripePaymentIntentId,
   }).from(paymentAttempts).where(eq(paymentAttempts.transactionId, transaction.id))
     .orderBy(desc(paymentAttempts.attemptNumber)).limit(1);
   const [receipt] = await db.select({
     status: emailDeliveries.status,
     sentAt: emailDeliveries.sentAt,
     attemptCount: emailDeliveries.attemptCount,
-  }).from(emailDeliveries).where(eq(emailDeliveries.transactionId, transaction.id)).limit(1);
+  }).from(emailDeliveries).where(and(eq(emailDeliveries.transactionId, transaction.id), eq(emailDeliveries.kind, "RESIDENT_RECEIPT"))).limit(1);
   return c.json({
     transaction, items, receipt: receipt ?? null,
     payment: {
@@ -79,6 +81,8 @@ transactionRoutes.get("/:id", async (c) => {
       displayStatus: employeePaymentStatus[transaction.paymentStatus],
       readerDisplayPending: transaction.paymentStatus === "SENDING_TO_TERMINAL" &&
         paymentAttempt?.status === "READER_RESERVED" && !paymentAttempt.lastErrorCode,
+      recoveryRequired: Boolean(paymentAttempt?.status === "READER_RESERVED" &&
+        !paymentAttempt.stripePaymentIntentId && transaction.paymentStatus !== "SENDING_TO_TERMINAL"),
       recoverable: Boolean(paymentAttempt && !["SUCCEEDED", "CANCELED", "EXPIRED"].includes(paymentAttempt.status)),
     },
   });
@@ -104,6 +108,7 @@ transactionRoutes.post("/", async (c) => {
     return c.json({ transaction: created }, 201);
   } catch (error) {
     if (error instanceof ZodError) return c.json({ error: "Invalid transaction", issues: error.issues }, 400);
+    if (error instanceof FinancialValidationError) return c.json({ error: error.message, code: error.code }, 400);
     throw error;
   }
 });

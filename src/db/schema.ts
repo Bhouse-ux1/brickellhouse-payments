@@ -27,7 +27,7 @@ export const attemptStatusEnum = pgEnum("payment_attempt_status", [
   "WAITING_FOR_CUSTOMER", "PROCESSING", "SUCCEEDED", "FAILED", "CANCELED", "EXPIRED",
 ]);
 export const emailStatusEnum = pgEnum("email_delivery_status", ["PENDING", "SENDING", "SENT", "FAILED"]);
-export const emailKindEnum = pgEnum("email_delivery_kind", ["RESIDENT_RECEIPT"]);
+export const emailKindEnum = pgEnum("email_delivery_kind", ["RESIDENT_RECEIPT", "MANAGEMENT_PAYMENT_CONFIRMATION"]);
 
 export const users = pgTable("users", {
   id: text("id").primaryKey(),

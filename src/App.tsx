@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { NavLink, Route, Routes } from "react-router-dom";
 import {
   BellRing, Building2, CarFront, CircleParking, CreditCard, Droplets, KeyRound,
   CalendarDays, Download, Landmark, LogOut, Minus, Plus, Printer, ReceiptText, Search, ShieldCheck, Thermometer, UserCog, Wind, Wrench, X,
 } from "lucide-react";
 import { calculateProcessingFee } from "@/domain/payments/processing-fee";
+import { meetsMinimumPayment, MINIMUM_PAYMENT_MESSAGE } from "@/domain/payments/minimum-payment";
 import { productCatalog, type TrustedProduct } from "@/domain/products/catalog";
 import { MAX_QUANTITY, parseMoneyInput, parseQuantityInput } from "@/domain/transactions/validation";
 
@@ -62,6 +63,8 @@ function NewTransaction() {
   const [notice, setNotice] = useState("");
   const [charging, setCharging] = useState(false);
   const [readerDisplayPending, setReaderDisplayPending] = useState(false);
+  const [terminalCode, setTerminalCode] = useState<string | null>(null);
+  const requestInFlight = useRef(false);
 
   useEffect(() => {
     if (preview) return;
@@ -88,11 +91,12 @@ function NewTransaction() {
         const data = await response.json() as {
           transaction: { unitNumber: string; customerEmail: string };
           items: Array<{ productId: string | null; productNameSnapshot: string; unitPriceCentsSnapshot: number; quantity: number }>;
-          payment: { status: string; displayStatus: string; readerDisplayPending: boolean };
+          payment: { status: string; displayStatus: string; readerDisplayPending: boolean; recoveryRequired: boolean };
         };
         if (stopped) return;
-        setNotice(data.payment.displayStatus);
+        setNotice(data.payment.recoveryRequired ? "Terminal state needs reconciliation—do not start another charge." : data.payment.displayStatus);
         setReaderDisplayPending(data.payment.readerDisplayPending);
+        setTerminalCode(data.payment.recoveryRequired ? "ORPHANED_READER_RESERVATION" : null);
         if (hydratedTransactionId !== activeTransactionId) {
           setUnit(data.transaction.unitNumber);
           setEmail(data.transaction.customerEmail);
@@ -129,7 +133,8 @@ function NewTransaction() {
   const total = subtotal + fee;
   const selected = catalog.filter((p) => quantities[p.id]);
   const amountCents = parseMoneyInput(amount);
-  const canCharge = Boolean(unit.trim() && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && (selected.length || custom));
+  const hasRequiredDetails = Boolean(unit.trim() && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && (selected.length || custom));
+  const canCharge = hasRequiredDetails && meetsMinimumPayment(total);
 
   function change(product: CatalogProduct, delta: number) {
     if (activeTransactionId) return;
@@ -151,11 +156,12 @@ function NewTransaction() {
   }
 
   async function prepareCharge() {
-    if (!canCharge || charging) return;
+    if (!canCharge || charging || requestInFlight.current) return;
     if (import.meta.env.DEV && new URLSearchParams(window.location.search).get("preview") === "1") {
       setNotice("Terminal setup is not complete. No payment was created.");
       return;
     }
+    requestInFlight.current = true;
     setCharging(true);
     setNotice("Preparing the transaction…");
     try {
@@ -172,19 +178,25 @@ function NewTransaction() {
           }),
         });
         if (response.status === 401) { setNotice("Your session has ended. Sign in and try again."); return; }
-        if (!response.ok) { setNotice("This transaction could not be prepared. Please try again."); return; }
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({})) as { error?: string; code?: string };
+          setNotice(body.code === "MINIMUM_PAYMENT" ? MINIMUM_PAYMENT_MESSAGE : body.error ?? "This transaction could not be prepared. Please try again.");
+          return;
+        }
         const data = await response.json() as { transaction: { id: string } };
         transactionId = data.transaction.id;
         sessionStorage.setItem("bh_active_transaction", transactionId);
         setActiveTransactionId(transactionId);
       }
       const terminal = await authenticatedFetch(`/api/transactions/${transactionId}/payment-attempts`, { method: "POST" });
-      const terminalData = await terminal.json() as { displayStatus?: string; error?: string; readerDisplayPending?: boolean };
+      const terminalData = await terminal.json() as { displayStatus?: string; error?: string; code?: string; readerDisplayPending?: boolean };
       if (typeof terminalData.readerDisplayPending === "boolean") setReaderDisplayPending(terminalData.readerDisplayPending);
+      setTerminalCode(terminal.ok ? null : terminalData.code ?? null);
       setNotice(terminalData.displayStatus ?? terminalData.error ?? "Payment status is being checked. Do not start another charge.");
     } catch {
       setNotice("The service is temporarily unavailable. No payment request was sent.");
     } finally {
+      requestInFlight.current = false;
       setCharging(false);
     }
   }
@@ -226,14 +238,16 @@ function NewTransaction() {
         {activeTransactionId && <button className="cancelPayment" disabled={charging} onClick={async () => {
           setCharging(true);
           try {
-            const action = readerDisplayPending ? "clear-terminal" : "cancel";
+            const reconciliationRequired = ["ORPHANED_READER_RESERVATION", "TERMINAL_CART_ACTIVE"].includes(terminalCode ?? "");
+            const action = readerDisplayPending || reconciliationRequired ? "clear-terminal" : "cancel";
             const response = await authenticatedFetch(`/api/transactions/${activeTransactionId}/payment-attempts/${action}`, { method: "POST" });
             const data = await response.json() as { displayStatus?: string; error?: string };
             setNotice(data.displayStatus ?? data.error ?? "Payment status is being checked.");
-            if (response.ok) { sessionStorage.removeItem("bh_active_transaction"); setActiveTransactionId(null); setReaderDisplayPending(false); }
+            if (response.ok) { sessionStorage.removeItem("bh_active_transaction"); setActiveTransactionId(null); setReaderDisplayPending(false); setTerminalCode(null); }
           } finally { setCharging(false); }
-        }}>{readerDisplayPending ? "Clear Terminal" : "Cancel terminal payment"}</button>}
-        {!canCharge && <p className="hint">Enter resident details and add a charge to continue.</p>}
+        }}>{readerDisplayPending ? "Clear Terminal" : ["ORPHANED_READER_RESERVATION", "TERMINAL_CART_ACTIVE"].includes(terminalCode ?? "") ? "Reconcile Terminal" : "Cancel terminal payment"}</button>}
+        {hasRequiredDetails && !meetsMinimumPayment(total) && <p className="hint">{MINIMUM_PAYMENT_MESSAGE}</p>}
+        {!hasRequiredDetails && <p className="hint">Enter resident details and add a charge to continue.</p>}
       </aside>
     </div>
   </>;
