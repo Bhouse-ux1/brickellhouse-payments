@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { createApp } from "./index";
+import { describe, expect, it, vi } from "vitest";
+import { createApp, createScheduledHandler } from "./index";
 
 describe("Worker API boundaries", () => {
   it("exposes an unauthenticated health check", async () => {
@@ -35,5 +35,22 @@ describe("Worker API boundaries", () => {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "staff@example.com", password: "not-a-password" }),
     }, {})).status).toBe(503);
     expect((await createApp().request("/api/admin/users", {}, {})).status).toBe(401);
+  });
+
+  it("routes scheduled events only to the database keepalive", async () => {
+    const keepalive = vi.fn(async () => undefined);
+    const waitUntil = vi.fn();
+    const env = { HYPERDRIVE: { connectionString: "postgresql://placeholder" } as Hyperdrive };
+
+    createScheduledHandler(keepalive)(
+      {} as ScheduledController,
+      env,
+      { waitUntil } as unknown as ExecutionContext,
+    );
+
+    expect(keepalive).toHaveBeenCalledOnce();
+    expect(keepalive).toHaveBeenCalledWith(env);
+    expect(waitUntil).toHaveBeenCalledWith(expect.any(Promise));
+    await waitUntil.mock.calls[0]?.[0];
   });
 });

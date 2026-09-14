@@ -6,8 +6,7 @@ import { accountingRoutes } from "@worker/routes/accounting";
 import { adminRoutes } from "@worker/routes/admin";
 import { webhookRoutes } from "@worker/routes/webhooks";
 import { isApprovedLiveStripeKey } from "@worker/services/stripe-client";
-import { expireAbandonedReaderDisplays } from "@worker/services/terminal-payment";
-import { deliverPendingReceipts } from "@worker/services/receipt-delivery";
+import { runScheduledDatabaseKeepalive } from "@worker/services/database-keepalive";
 import { productionAuthConfigured } from "@worker/services/production-auth";
 import type { WorkerEnvironment } from "@worker/types";
 
@@ -38,12 +37,19 @@ export function createApp() {
 
 const app = createApp();
 
+export function createScheduledHandler(
+  keepalive: (env: WorkerEnvironment["Bindings"]) => Promise<void> = runScheduledDatabaseKeepalive,
+) {
+  return function scheduled(
+    _controller: ScheduledController,
+    env: WorkerEnvironment["Bindings"],
+    ctx: ExecutionContext,
+  ) {
+    ctx.waitUntil(keepalive(env));
+  };
+}
+
 export default {
   fetch: app.fetch,
-  scheduled(_controller: ScheduledController, env: WorkerEnvironment["Bindings"], ctx: ExecutionContext) {
-    ctx.waitUntil(Promise.allSettled([
-      expireAbandonedReaderDisplays({ env }),
-      deliverPendingReceipts(env),
-    ]).then(() => undefined));
-  },
+  scheduled: createScheduledHandler(),
 };

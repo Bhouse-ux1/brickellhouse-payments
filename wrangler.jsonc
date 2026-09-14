@@ -14,12 +14,12 @@
     "EMAIL_FROM": "orders@brickellhouse.org"
   },
   "triggers": {
-    "crons": ["* * * * *"]
+    "crons": ["0 */6 * * *"]
   },
   "hyperdrive": [
     {
       "binding": "HYPERDRIVE",
-      "id": "77d4ce39720040aa92f64191d381d6de"
+      "id": "4ca9bba71d0b4564a08c176ebe638ace"
     }
   ]
 }
