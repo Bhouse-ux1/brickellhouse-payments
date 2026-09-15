@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { paymentAttempts } from "@/db/schema";
+import { describe, expect, it, vi } from "vitest";
+import { paymentAttempts, transactions } from "@/db/schema";
 import {
   classifyReaderAction, decideExistingPaymentIntentAction, decidePolledPaymentReconciliation,
-  decideReaderDisplayRecovery, READER_DISPLAY_TIMEOUT_MS, shouldRecoverExpiredIdleReservation,
+  decideReaderDisplayRecovery, processAfterPaymentIntentPersistence, READER_DISPLAY_TIMEOUT_MS, shouldRecoverExpiredIdleReservation,
 } from "./terminal-payment";
 
 describe("Terminal payment recovery", () => {
@@ -52,6 +52,27 @@ describe("Terminal payment recovery", () => {
     expect(paymentAttempts.idempotencyKey.isUnique).toBe(true);
     expect(paymentAttempts.stripePaymentIntentId.isUnique).toBe(true);
     expect(paymentAttempts.stripeReaderOperationId.isUnique).toBe(true);
+    expect(transactions.stripePaymentIntentId.isUnique).toBe(true);
+    expect(transactions.stripeChargeId.isUnique).toBe(true);
+  });
+
+  it("never begins reader processing until durable PaymentIntent persistence is confirmed", async () => {
+    const sequence: string[] = [];
+    const result = await processAfterPaymentIntentPersistence({
+      confirmPersisted: async () => { sequence.push("persisted"); },
+      processPaymentIntent: async () => { sequence.push("processed"); return "reader-action"; },
+    });
+    expect(sequence).toEqual(["persisted", "processed"]);
+    expect(result).toBe("reader-action");
+  });
+
+  it("does not call process_payment_intent when persistence confirmation fails", async () => {
+    const processPaymentIntent = vi.fn(async () => "reader-action");
+    await expect(processAfterPaymentIntentPersistence({
+      confirmPersisted: async () => { throw new Error("database unavailable"); },
+      processPaymentIntent,
+    })).rejects.toThrow(/database unavailable/u);
+    expect(processPaymentIntent).not.toHaveBeenCalled();
   });
 
   it("releases an orphan only after Stripe confirms idle and refuses uncertain payment state", () => {

@@ -212,6 +212,30 @@ export const stripeEvents = pgTable("stripe_events", {
   processingError: text("processing_error"),
 }, (table) => [index("stripe_events_type_received_idx").on(table.eventType, table.receivedAt)]);
 
+export const terminalReaderObservations = pgTable("terminal_reader_observations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  stripeEventId: varchar("stripe_event_id", { length: 255 }).notNull()
+    .references(() => stripeEvents.stripeEventId, { onDelete: "restrict" }).unique(),
+  readerId: varchar("reader_id", { length: 255 }).notNull(),
+  locationId: varchar("location_id", { length: 255 }).notNull(),
+  liveMode: boolean("live_mode").notNull(),
+  actionType: varchar("action_type", { length: 80 }).notNull(),
+  actionStatus: varchar("action_status", { length: 40 }).notNull(),
+  stripePaymentIntentId: varchar("stripe_payment_intent_id", { length: 255 }).notNull(),
+  paymentAttemptId: uuid("payment_attempt_id").notNull()
+    .references(() => paymentAttempts.id, { onDelete: "restrict" }),
+  transactionId: uuid("transaction_id").notNull()
+    .references(() => transactions.id, { onDelete: "restrict" }),
+  observedAt: timestamp("observed_at", { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("terminal_reader_observations_intent_status_idx")
+    .on(table.stripePaymentIntentId, table.actionStatus),
+  index("terminal_reader_observations_attempt_idx").on(table.paymentAttemptId),
+  check("terminal_reader_observations_action_type", sql`${table.actionType} = 'process_payment_intent'`),
+  check("terminal_reader_observations_action_status", sql`${table.actionStatus} IN ('in_progress', 'succeeded', 'failed')`),
+]);
+
 export const emailDeliveries = pgTable("email_deliveries", {
   id: uuid("id").primaryKey().defaultRandom(),
   transactionId: uuid("transaction_id").notNull().references(() => transactions.id, { onDelete: "restrict" }),

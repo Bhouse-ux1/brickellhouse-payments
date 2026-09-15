@@ -7,6 +7,7 @@ import { requireAdmin } from "@worker/middleware/require-admin";
 import { recordAuthAudit, requestAuditContext } from "@worker/services/auth-audit";
 import { createProductionAuth } from "@worker/services/production-auth";
 import { emailDeliveryConfigured } from "@worker/services/resend-email";
+import { deliverPaidTransactionEmail, queueManagementNotificationRetry } from "@worker/services/receipt-delivery";
 import type { WorkerEnvironment } from "@worker/types";
 
 const createEmployeeSchema = z.object({
@@ -110,4 +111,22 @@ adminRoutes.post("/users/:id/send-password-setup", async (c) => {
     details: requestAuditContext(c.req.raw),
   });
   return c.json({ ok: true });
+});
+
+adminRoutes.post("/transactions/:id/management-notification/retry", async (c) => {
+  if (!emailDeliveryConfigured(c.env)) return c.json({ error: "Management email is not configured" }, 503);
+  const db = createDatabase(c.env);
+  if (!db) return c.json({ error: "Management delivery storage is not configured" }, 503);
+  const queued = await queueManagementNotificationRetry({ db, transactionId: c.req.param("id") });
+  if (queued.status === "NOT_PAID") return c.json({ error: "Only completed payments can send confirmations" }, 409);
+  if (queued.status === "NOT_QUEUED") return c.json({ error: "Management delivery was not found" }, 404);
+  if (queued.status === "IN_PROGRESS") return c.json({ error: "Management delivery is already in progress" }, 409);
+  if (queued.status === "ALREADY_SENT") return c.json({ status: "ALREADY_SENT" });
+  const result = await deliverPaidTransactionEmail({
+    db,
+    env: c.env,
+    transactionId: c.req.param("id"),
+    kind: "MANAGEMENT_PAYMENT_CONFIRMATION",
+  });
+  return c.json({ status: result.status });
 });

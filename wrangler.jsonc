@@ -17,6 +17,13 @@
   "triggers": {
     "crons": ["0 */6 * * *", "* * * * *"]
   },
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    }
+  },
   "hyperdrive": [
     {
       "binding": "HYPERDRIVE",

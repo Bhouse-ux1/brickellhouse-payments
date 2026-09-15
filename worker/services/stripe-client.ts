@@ -2,6 +2,15 @@ import type { WorkerBindings } from "@worker/types";
 
 export type StripeCharge = {
   id: string;
+  object?: "charge";
+  amount?: number;
+  amount_captured?: number;
+  captured?: boolean;
+  currency?: string;
+  livemode?: boolean;
+  paid?: boolean;
+  payment_intent?: string | StripePaymentIntent | null;
+  created?: number;
   payment_method_details?: { card_present?: { brand?: string; last4?: string } };
 };
 
@@ -17,6 +26,53 @@ export type StripePaymentIntent = {
   metadata: Record<string, string>;
   latest_charge?: string | StripeCharge | null;
 };
+
+export const STRIPE_TERMINAL_SOURCE = "brickellhouse_terminal";
+const LEGACY_STRIPE_TERMINAL_SOURCE = "brickellhouse_payments";
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+export type StripePaymentIntentOwnership =
+  | { classification: "UNRELATED"; source: string | null }
+  | { classification: "OWNED_INVALID"; source: string; reason: string }
+  | { classification: "OWNED"; source: string; attemptId: string; transactionId: string; transactionNumber: string };
+
+export function buildBrickellHousePaymentIntentMetadata(input: {
+  attemptId: string;
+  transactionId: string;
+  transactionNumber: string;
+}): Record<string, string> {
+  return {
+    source: STRIPE_TERMINAL_SOURCE,
+    attempt_id: input.attemptId,
+    internal_transaction_id: input.transactionId,
+    transaction_number: input.transactionNumber,
+  };
+}
+
+export function classifyStripePaymentIntentOwnership(paymentIntent: StripePaymentIntent): StripePaymentIntentOwnership {
+  const metadata = paymentIntent.metadata ?? {};
+  const source = metadata.source ?? null;
+  if (source !== STRIPE_TERMINAL_SOURCE && source !== LEGACY_STRIPE_TERMINAL_SOURCE) {
+    return { classification: "UNRELATED", source };
+  }
+  const attemptId = metadata.attempt_id ?? metadata.payment_attempt_id;
+  if (!attemptId || !UUID_PATTERN.test(attemptId)) {
+    return { classification: "OWNED_INVALID", source, reason: "missing_or_invalid_attempt_id" };
+  }
+  if (!metadata.internal_transaction_id || !UUID_PATTERN.test(metadata.internal_transaction_id)) {
+    return { classification: "OWNED_INVALID", source, reason: "missing_or_invalid_transaction_id" };
+  }
+  if (!metadata.transaction_number) {
+    return { classification: "OWNED_INVALID", source, reason: "missing_transaction_number" };
+  }
+  return {
+    classification: "OWNED",
+    source,
+    attemptId,
+    transactionId: metadata.internal_transaction_id,
+    transactionNumber: metadata.transaction_number,
+  };
+}
 
 export type StripeReaderCart = {
   currency: "usd";
@@ -125,6 +181,7 @@ export function validateReaderPaymentAction(reader: StripeReader, expectedPaymen
 export function validateLivePaymentIntent(input: {
   paymentIntent: StripePaymentIntent;
   expectedPaymentIntentId?: string | null;
+  paymentAttemptId: string;
   transactionId: string;
   transactionNumber: string;
   amountCents: number;
@@ -136,8 +193,9 @@ export function validateLivePaymentIntent(input: {
   if (intent.status === "succeeded" && intent.amount_received !== input.amountCents) throw new Error("Stripe received amount does not match the transaction.");
   if (intent.currency.toLowerCase() !== "usd") throw new Error("Stripe PaymentIntent currency must be USD.");
   if (!intent.payment_method_types?.includes("card_present")) throw new Error("Stripe PaymentIntent is not card-present.");
-  if (intent.metadata.source !== "brickellhouse_payments" || intent.metadata.internal_transaction_id !== input.transactionId ||
-      intent.metadata.transaction_number !== input.transactionNumber) {
+  const ownership = classifyStripePaymentIntentOwnership(intent);
+  if (ownership.classification !== "OWNED" || ownership.attemptId !== input.paymentAttemptId ||
+      ownership.transactionId !== input.transactionId || ownership.transactionNumber !== input.transactionNumber) {
     throw new Error("Stripe PaymentIntent relationship does not match the transaction.");
   }
 }

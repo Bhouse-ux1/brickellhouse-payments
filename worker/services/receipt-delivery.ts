@@ -147,3 +147,25 @@ export async function queueReceiptResend(input: { db: Database; transactionId: s
   }).where(eq(emailDeliveries.id, delivery.id));
   return { status: "QUEUED" as const };
 }
+
+export async function queueManagementNotificationRetry(input: { db: Database; transactionId: string }) {
+  const [transaction] = await input.db.select({ status: transactions.paymentStatus }).from(transactions)
+    .where(eq(transactions.id, input.transactionId)).limit(1);
+  if (!transaction || transaction.status !== "PAID") return { status: "NOT_PAID" as const };
+  const [delivery] = await input.db.select().from(emailDeliveries)
+    .where(and(
+      eq(emailDeliveries.transactionId, input.transactionId),
+      eq(emailDeliveries.kind, "MANAGEMENT_PAYMENT_CONFIRMATION"),
+    )).limit(1);
+  if (!delivery) return { status: "NOT_QUEUED" as const };
+  if (delivery.status === "SENT") return { status: "ALREADY_SENT" as const };
+  if (delivery.status === "SENDING") return { status: "IN_PROGRESS" as const };
+  if (delivery.status === "FAILED") {
+    await input.db.update(emailDeliveries).set({
+      status: "PENDING",
+      lastError: null,
+      updatedAt: new Date(),
+    }).where(and(eq(emailDeliveries.id, delivery.id), eq(emailDeliveries.status, "FAILED")));
+  }
+  return { status: "QUEUED" as const };
+}

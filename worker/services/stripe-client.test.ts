@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  createStripeTerminalClient, stripeLiveConfigurationError,
+  buildBrickellHousePaymentIntentMetadata, classifyStripePaymentIntentOwnership, createStripeTerminalClient, stripeLiveConfigurationError,
   validateLivePaymentIntent, validateLiveReader, validateReaderDisplayState, validateReaderPaymentAction,
 } from "./stripe-client";
+
+const attemptId = "11111111-1111-4111-8111-111111111111";
+const transactionId = "22222222-2222-4222-8222-222222222222";
 
 const liveEnv = {
   STRIPE_LIVE_MODE_ONLY: "true",
@@ -20,11 +23,7 @@ const trustedIntent = {
   status: "succeeded",
   livemode: true,
   payment_method_types: ["card_present"],
-  metadata: {
-    source: "brickellhouse_payments",
-    internal_transaction_id: "txn-1",
-    transaction_number: "POS-000001",
-  },
+  metadata: buildBrickellHousePaymentIntentMetadata({ attemptId, transactionId, transactionNumber: "POS-000001" }),
 };
 
 describe("live Stripe boundary", () => {
@@ -65,13 +64,33 @@ describe("live Stripe boundary", () => {
   });
 
   it("rejects wrong intent identity, amount, currency, or non-live evidence", () => {
-    const input = { paymentIntent: trustedIntent, expectedPaymentIntentId: "pi_live", transactionId: "txn-1", transactionNumber: "POS-000001", amountCents: 10_000 };
+    const input = { paymentIntent: trustedIntent, expectedPaymentIntentId: "pi_live", paymentAttemptId: attemptId, transactionId, transactionNumber: "POS-000001", amountCents: 10_000 };
     expect(() => validateLivePaymentIntent(input)).not.toThrow();
     expect(() => validateLivePaymentIntent({ ...input, expectedPaymentIntentId: "pi_wrong" })).toThrow(/Unexpected/u);
     expect(() => validateLivePaymentIntent({ ...input, paymentIntent: { ...trustedIntent, amount: 9_999 } })).toThrow(/amount/u);
     expect(() => validateLivePaymentIntent({ ...input, paymentIntent: { ...trustedIntent, amount_received: 9_999 } })).toThrow(/received amount/u);
     expect(() => validateLivePaymentIntent({ ...input, paymentIntent: { ...trustedIntent, currency: "eur" } })).toThrow(/USD/u);
     expect(() => validateLivePaymentIntent({ ...input, paymentIntent: { ...trustedIntent, livemode: false } })).toThrow(/live mode/u);
+  });
+
+  it("uses non-sensitive durable ownership metadata and recognizes legacy owned intents", () => {
+    expect(trustedIntent.metadata).toEqual({
+      source: "brickellhouse_terminal",
+      attempt_id: attemptId,
+      internal_transaction_id: transactionId,
+      transaction_number: "POS-000001",
+    });
+    expect(classifyStripePaymentIntentOwnership(trustedIntent)).toMatchObject({ classification: "OWNED", attemptId, transactionId });
+    expect(classifyStripePaymentIntentOwnership({
+      ...trustedIntent,
+      metadata: {
+        source: "brickellhouse_payments",
+        payment_attempt_id: attemptId,
+        internal_transaction_id: transactionId,
+        transaction_number: "POS-000001",
+      },
+    })).toMatchObject({ classification: "OWNED", attemptId });
+    expect(classifyStripePaymentIntentOwnership({ ...trustedIntent, metadata: { x_terminal_standalone_note: "" } })).toEqual({ classification: "UNRELATED", source: null });
   });
 
   it("rejects an unexpected reader or location", () => {

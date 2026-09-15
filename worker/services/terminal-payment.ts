@@ -9,16 +9,77 @@ import { employeePaymentStatus } from "@/domain/payments/status-display";
 import {
   extendReaderReservation, releaseReaderReservation, reserveConfiguredReader, syncConfiguredReader,
 } from "@/services/terminal/reader-reservation";
-import { markPaymentFailed, markPaymentSucceeded } from "@worker/services/payment-reconciliation";
+import { markPaymentFailed, reconcileTerminalPaymentSuccess } from "@worker/services/payment-reconciliation";
 import {
-  createStripeTerminalClient, StripeApiError, stripeLiveConfigurationError,
-  validateLivePaymentIntent, validateLiveReader, validateReaderDisplayState, validateReaderPaymentAction,
+  buildBrickellHousePaymentIntentMetadata, createStripeTerminalClient, StripeApiError, stripeLiveConfigurationError,
+  stripeReaderLocationId, validateLivePaymentIntent, validateLiveReader, validateReaderDisplayState, validateReaderPaymentAction,
 } from "@worker/services/stripe-client";
 import type { StripeReaderCart, StripeTerminalClient } from "@worker/services/stripe-client";
 import type { WorkerBindings } from "@worker/types";
 
 type PaymentAttempt = typeof paymentAttempts.$inferSelect;
 type Transaction = typeof transactions.$inferSelect;
+
+export async function confirmPaymentIntentMapping(input: {
+  db: Database;
+  attemptId: string;
+  transactionId: string;
+  paymentIntentId: string;
+}): Promise<void> {
+  const [mapping] = await input.db.select({
+    attemptPaymentIntentId: paymentAttempts.stripePaymentIntentId,
+    transactionPaymentIntentId: transactions.stripePaymentIntentId,
+  }).from(paymentAttempts)
+    .innerJoin(transactions, eq(transactions.id, paymentAttempts.transactionId))
+    .where(and(eq(paymentAttempts.id, input.attemptId), eq(transactions.id, input.transactionId)))
+    .limit(1);
+  if (mapping?.attemptPaymentIntentId !== input.paymentIntentId || mapping.transactionPaymentIntentId !== input.paymentIntentId) {
+    throw new Error("PaymentIntent mapping was not durably persisted.");
+  }
+}
+
+export async function persistPaymentIntentMapping(input: {
+  db: Database;
+  attemptId: string;
+  transactionId: string;
+  paymentIntentId: string;
+}): Promise<void> {
+  const now = new Date();
+  await input.db.transaction(async (tx) => {
+    const [attempt] = await tx.update(paymentAttempts).set({
+      stripePaymentIntentId: input.paymentIntentId,
+      status: "PAYMENT_INTENT_CREATED",
+      lastErrorCode: null,
+      lastErrorMessage: null,
+      updatedAt: now,
+    }).where(and(
+      eq(paymentAttempts.id, input.attemptId),
+      inArray(paymentAttempts.status, ["READER_RESERVED", "PAYMENT_INTENT_CREATED"]),
+      or(isNull(paymentAttempts.stripePaymentIntentId), eq(paymentAttempts.stripePaymentIntentId, input.paymentIntentId)),
+    )).returning({ id: paymentAttempts.id });
+    if (!attempt) throw new Error("PaymentIntent could not be attached to its payment attempt.");
+
+    const [transaction] = await tx.update(transactions).set({
+      stripePaymentIntentId: input.paymentIntentId,
+      paymentStatus: "READY",
+      updatedAt: now,
+    }).where(and(
+      eq(transactions.id, input.transactionId),
+      ne(transactions.paymentStatus, "PAID"),
+      or(isNull(transactions.stripePaymentIntentId), eq(transactions.stripePaymentIntentId, input.paymentIntentId)),
+    )).returning({ id: transactions.id });
+    if (!transaction) throw new Error("PaymentIntent could not be attached to its transaction.");
+  });
+  await confirmPaymentIntentMapping(input);
+}
+
+export async function processAfterPaymentIntentPersistence<T>(input: {
+  confirmPersisted: () => Promise<void>;
+  processPaymentIntent: () => Promise<T>;
+}): Promise<T> {
+  await input.confirmPersisted();
+  return input.processPaymentIntent();
+}
 
 export class TerminalFlowError extends Error {
   constructor(public readonly code: string, message: string, public readonly status: 400 | 404 | 409 | 503 = 409) {
@@ -508,14 +569,14 @@ export async function startTerminalPayment(input: {
     paymentIntent = await stripe.retrievePaymentIntent(attempt.stripePaymentIntentId);
     validateLivePaymentIntent({
       paymentIntent, expectedPaymentIntentId: attempt.stripePaymentIntentId,
+      paymentAttemptId: attempt.id,
       transactionId: transaction.id, transactionNumber: transaction.number, amountCents: paymentAmountCents,
     });
     const action = decideExistingPaymentIntentAction({ attemptStatus: attempt.status, paymentIntentStatus: paymentIntent.status });
     if (action === "RECONCILE_SUCCESS") {
-      await markPaymentSucceeded({
+      await reconcileTerminalPaymentSuccess({
         db: input.db, transactionId: transaction.id, paymentAttemptId: attempt.id,
-        paymentIntent, readerId: stripeReader.id, locationId: input.env.STRIPE_TERMINAL_LOCATION_ID!,
-        customerEmail: transaction.customerEmail,
+        env: input.env, paymentIntent, authoritativeReader: stripeReader,
         managementNotificationEmail: input.env.PAYMENT_NOTIFICATION_EMAIL,
       });
       return view(transaction.id, "PAID");
@@ -528,25 +589,22 @@ export async function startTerminalPayment(input: {
     paymentIntent = await stripe.createPaymentIntent({
       amountCents: paymentAmountCents,
       idempotencyKey: attempt.idempotencyKey,
-      metadata: {
-        source: "brickellhouse_payments",
-        transaction_number: transaction.number,
-        unit_number: transaction.unitNumber,
-        internal_transaction_id: transaction.id,
-        payment_attempt_id: attempt.id,
-      },
+      metadata: buildBrickellHousePaymentIntentMetadata({
+        attemptId: attempt.id,
+        transactionId: transaction.id,
+        transactionNumber: transaction.number,
+      }),
     });
     validateLivePaymentIntent({
-      paymentIntent, transactionId: transaction.id,
+      paymentIntent, paymentAttemptId: attempt.id, transactionId: transaction.id,
       transactionNumber: transaction.number, amountCents: paymentAmountCents,
     });
-    await input.db.update(paymentAttempts).set({
-      stripePaymentIntentId: paymentIntent.id, status: "PAYMENT_INTENT_CREATED",
-      lastErrorCode: null, lastErrorMessage: null, updatedAt: new Date(),
-    }).where(eq(paymentAttempts.id, attempt.id));
-    await input.db.update(transactions).set({
-      stripePaymentIntentId: paymentIntent.id, paymentStatus: "READY", updatedAt: new Date(),
-    }).where(eq(transactions.id, transaction.id));
+    await persistPaymentIntentMapping({
+      db: input.db,
+      attemptId: attempt.id,
+      transactionId: transaction.id,
+      paymentIntentId: paymentIntent.id,
+    });
     attempt = { ...attempt, stripePaymentIntentId: paymentIntent.id, status: "PAYMENT_INTENT_CREATED" };
   }
 
@@ -557,21 +615,46 @@ export async function startTerminalPayment(input: {
   attempt = { ...attempt, status: "SENT_TO_READER", lastErrorCode: "READER_PROCESS_STARTING" };
 
   try {
-    const processedReader = await stripe.processPaymentIntent({
-      readerId: input.env.STRIPE_TERMINAL_READER_ID!,
-      paymentIntentId: paymentIntent.id,
-      idempotencyKey: buildReaderProcessIdempotencyKey(attempt.idempotencyKey),
+    const processedReader = await processAfterPaymentIntentPersistence({
+      confirmPersisted: () => confirmPaymentIntentMapping({
+        db: input.db,
+        attemptId: attempt.id,
+        transactionId: transaction.id,
+        paymentIntentId: paymentIntent.id,
+      }),
+      processPaymentIntent: () => stripe.processPaymentIntent({
+        readerId: input.env.STRIPE_TERMINAL_READER_ID!,
+        paymentIntentId: paymentIntent.id,
+        idempotencyKey: buildReaderProcessIdempotencyKey(attempt.idempotencyKey),
+      }),
     });
     validateLiveReader(processedReader, input.env.STRIPE_TERMINAL_READER_ID!, input.env.STRIPE_TERMINAL_LOCATION_ID!);
     validateReaderPaymentAction(processedReader, paymentIntent.id);
-    await input.db.update(paymentAttempts).set({
-      status: "WAITING_FOR_CUSTOMER", stripeReaderOperationId: `${processedReader.id}:${paymentIntent.id}`, updatedAt: new Date(),
-      lastErrorCode: null, lastErrorMessage: null,
-    }).where(eq(paymentAttempts.id, attempt.id));
-    await input.db.update(transactions).set({
-      paymentStatus: "WAITING_FOR_CUSTOMER", stripeReaderId: processedReader.id,
-      stripeLocationId: input.env.STRIPE_TERMINAL_LOCATION_ID!, updatedAt: new Date(),
-    }).where(eq(transactions.id, transaction.id));
+    const actualLocationId = stripeReaderLocationId(processedReader);
+    if (!actualLocationId) throw new Error("Stripe reader response has no authoritative location.");
+    const readerOperationId = `${processedReader.id}:${paymentIntent.id}`;
+    await input.db.transaction(async (tx) => {
+      const [operationRecorded] = await tx.update(paymentAttempts).set({
+        status: "WAITING_FOR_CUSTOMER", stripeReaderOperationId: readerOperationId, updatedAt: new Date(),
+        lastErrorCode: null, lastErrorMessage: null,
+      }).where(and(
+        eq(paymentAttempts.id, attempt.id),
+        eq(paymentAttempts.stripePaymentIntentId, paymentIntent.id),
+        or(isNull(paymentAttempts.stripeReaderOperationId), eq(paymentAttempts.stripeReaderOperationId, readerOperationId)),
+      )).returning({ id: paymentAttempts.id });
+      if (!operationRecorded) throw new Error("Stripe reader operation evidence could not be persisted.");
+      const [readerRecorded] = await tx.update(transactions).set({
+        paymentStatus: "WAITING_FOR_CUSTOMER", stripeReaderId: processedReader.id,
+        stripeLocationId: actualLocationId, updatedAt: new Date(),
+      }).where(and(
+        eq(transactions.id, transaction.id),
+        eq(transactions.stripePaymentIntentId, paymentIntent.id),
+        ne(transactions.paymentStatus, "PAID"),
+        or(isNull(transactions.stripeReaderId), eq(transactions.stripeReaderId, processedReader.id)),
+        or(isNull(transactions.stripeLocationId), eq(transactions.stripeLocationId, actualLocationId)),
+      )).returning({ id: transactions.id });
+      if (!readerRecorded) throw new Error("Stripe reader identity evidence could not be persisted.");
+    });
     await extendReaderReservation(input.db, internalReaderId, attempt.id);
     return view(transaction.id, "WAITING_FOR_CUSTOMER");
   } catch (error) {
@@ -673,6 +756,7 @@ export async function reconcileTerminalPayment(input: {
   validateLivePaymentIntent({
     paymentIntent,
     expectedPaymentIntentId: attempt.stripePaymentIntentId,
+    paymentAttemptId: attempt.id,
     transactionId: transaction.id,
     transactionNumber: transaction.number,
     amountCents: transaction.totalCents,
@@ -688,14 +772,13 @@ export async function reconcileTerminalPayment(input: {
     attemptStatus: attempt.status,
   });
   if (decision === "SUCCEEDED") {
-    await markPaymentSucceeded({
+    await reconcileTerminalPaymentSuccess({
       db: input.db,
+      env: input.env,
       transactionId: transaction.id,
       paymentAttemptId: attempt.id,
       paymentIntent,
-      readerId: reader.id,
-      locationId: input.env.STRIPE_TERMINAL_LOCATION_ID!,
-      customerEmail: transaction.customerEmail,
+      authoritativeReader: reader,
       managementNotificationEmail: input.env.PAYMENT_NOTIFICATION_EMAIL,
     });
     return view(transaction.id, "PAID");
@@ -801,13 +884,13 @@ export async function cancelTerminalPayment(input: {
   let paymentIntent = await stripe.retrievePaymentIntent(attempt.stripePaymentIntentId);
   validateLivePaymentIntent({
     paymentIntent, expectedPaymentIntentId: attempt.stripePaymentIntentId,
+    paymentAttemptId: attempt.id,
     transactionId: transaction.id, transactionNumber: transaction.number, amountCents: transaction.totalCents,
   });
   if (paymentIntent.status === "succeeded") {
-    await markPaymentSucceeded({
+    await reconcileTerminalPaymentSuccess({
       db: input.db, transactionId: transaction.id, paymentAttemptId: attempt.id,
-      paymentIntent, readerId: reader.id, locationId: input.env.STRIPE_TERMINAL_LOCATION_ID!,
-      customerEmail: transaction.customerEmail,
+      env: input.env, paymentIntent, authoritativeReader: reader,
       managementNotificationEmail: input.env.PAYMENT_NOTIFICATION_EMAIL,
     });
     return view(transaction.id, "PAID");
@@ -818,13 +901,13 @@ export async function cancelTerminalPayment(input: {
     paymentIntent = await stripe.retrievePaymentIntent(attempt.stripePaymentIntentId);
     validateLivePaymentIntent({
       paymentIntent, expectedPaymentIntentId: attempt.stripePaymentIntentId,
+      paymentAttemptId: attempt.id,
       transactionId: transaction.id, transactionNumber: transaction.number, amountCents: transaction.totalCents,
     });
     if (paymentIntent.status === "succeeded") {
-      await markPaymentSucceeded({
+      await reconcileTerminalPaymentSuccess({
         db: input.db, transactionId: transaction.id, paymentAttemptId: attempt.id,
-        paymentIntent, readerId: reader.id, locationId: input.env.STRIPE_TERMINAL_LOCATION_ID!,
-        customerEmail: transaction.customerEmail,
+        env: input.env, paymentIntent, authoritativeReader: canceledReader,
         managementNotificationEmail: input.env.PAYMENT_NOTIFICATION_EMAIL,
       });
       return view(transaction.id, "PAID");
