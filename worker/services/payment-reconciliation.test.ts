@@ -355,4 +355,30 @@ describe("failure transition safety", () => {
     });
     expect(update).not.toHaveBeenCalled();
   });
+
+  it("does not let a stale no-intent poll overwrite a newly persisted PaymentIntent", async () => {
+    const update = vi.fn();
+    const tx = {
+      update,
+      select: vi.fn(() => ({
+        from: () => ({
+          where: () => ({
+            limit: vi.fn(async () => [{ ...transaction, paymentStatus: "READY", stripePaymentIntentId: "pi_new" }]),
+          }),
+        }),
+      })),
+    };
+    const db = { transaction: vi.fn(async (callback: (value: typeof tx) => Promise<boolean>) => callback(tx)) };
+    const changed = await markPaymentFailed({
+      db: db as never,
+      transactionId,
+      paymentAttemptId: attemptId,
+      expectedPaymentIntentId: null,
+      code: "stale_poll",
+      message: "stale no-intent observation",
+      canceled: true,
+    });
+    expect(changed).toBe(false);
+    expect(update).not.toHaveBeenCalled();
+  });
 });

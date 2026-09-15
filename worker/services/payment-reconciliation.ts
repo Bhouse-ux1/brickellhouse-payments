@@ -310,6 +310,7 @@ export async function markPaymentFailed(input: {
   db: Database;
   transactionId: string;
   paymentAttemptId: string;
+  expectedPaymentIntentId?: string | null;
   code: string;
   message: string;
   canceled?: boolean;
@@ -319,28 +320,50 @@ export async function markPaymentFailed(input: {
   const now = input.now ?? new Date();
   const attemptStatus = input.canceled ? "CANCELED" as const : "FAILED" as const;
   const transactionStatus = input.canceled ? "CANCELED" as const : "FAILED" as const;
-  await input.db.transaction(async (tx) => {
+  return input.db.transaction(async (tx) => {
     const [currentTransaction] = await tx.select().from(transactions)
       .where(eq(transactions.id, input.transactionId)).limit(1);
     if (!currentTransaction) throw new PaymentReconciliationError("Payment failure transition transaction is missing.");
-    if (currentTransaction.paymentStatus === "PAID") return;
+    if (currentTransaction.paymentStatus === "PAID") return false;
+    if (input.expectedPaymentIntentId !== undefined &&
+        currentTransaction.stripePaymentIntentId !== input.expectedPaymentIntentId) return false;
+    const expectedAttemptMapping = input.expectedPaymentIntentId === undefined
+      ? undefined
+      : input.expectedPaymentIntentId === null
+        ? isNull(paymentAttempts.stripePaymentIntentId)
+        : eq(paymentAttempts.stripePaymentIntentId, input.expectedPaymentIntentId);
     const [updatedAttempt] = await tx.update(paymentAttempts).set({
       status: attemptStatus, completedAt: now, lastErrorCode: input.code.slice(0, 100),
       lastErrorMessage: input.message, updatedAt: now,
-    }).where(and(eq(paymentAttempts.id, input.paymentAttemptId), ne(paymentAttempts.status, "SUCCEEDED")))
+    }).where(and(
+      eq(paymentAttempts.id, input.paymentAttemptId),
+      ne(paymentAttempts.status, "SUCCEEDED"),
+      expectedAttemptMapping,
+    ))
       .returning({ id: paymentAttempts.id });
     if (!updatedAttempt) {
       const [currentAttempt] = await tx.select().from(paymentAttempts)
         .where(eq(paymentAttempts.id, input.paymentAttemptId)).limit(1);
-      if (currentAttempt?.status === "SUCCEEDED") return;
+      if (currentAttempt?.status === "SUCCEEDED") return false;
+      if (input.expectedPaymentIntentId !== undefined &&
+          currentAttempt?.stripePaymentIntentId !== input.expectedPaymentIntentId) return false;
       throw new PaymentReconciliationError("Payment failure transition affected no expected attempt row.");
     }
     await tx.update(transactions).set({ paymentStatus: transactionStatus, updatedAt: now })
-      .where(and(eq(transactions.id, input.transactionId), ne(transactions.paymentStatus, "PAID")));
+      .where(and(
+        eq(transactions.id, input.transactionId),
+        ne(transactions.paymentStatus, "PAID"),
+        input.expectedPaymentIntentId === undefined
+          ? undefined
+          : input.expectedPaymentIntentId === null
+            ? isNull(transactions.stripePaymentIntentId)
+            : eq(transactions.stripePaymentIntentId, input.expectedPaymentIntentId),
+      ));
     if (input.releaseReader !== false) {
       await tx.update(terminalReaders).set({
         lockPaymentAttemptId: null, lockAcquiredAt: null, lockExpiresAt: null, updatedAt: now,
       }).where(eq(terminalReaders.lockPaymentAttemptId, input.paymentAttemptId));
     }
+    return true;
   });
 }

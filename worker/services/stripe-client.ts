@@ -117,6 +117,7 @@ export interface StripeTerminalClient {
     metadata: Record<string, string>;
   }): Promise<StripePaymentIntent>;
   retrievePaymentIntent(id: string): Promise<StripePaymentIntent>;
+  cancelPaymentIntent(input: { paymentIntentId: string; idempotencyKey: string }): Promise<StripePaymentIntent>;
   retrieveReader(id: string): Promise<StripeReader>;
   setReaderDisplay(input: { readerId: string; cart: StripeReaderCart; idempotencyKey: string }): Promise<StripeReader>;
   processPaymentIntent(input: { readerId: string; paymentIntentId: string; idempotencyKey: string }): Promise<StripeReader>;
@@ -231,6 +232,15 @@ class FetchStripeTerminalClient implements StripeTerminalClient {
 
   retrievePaymentIntent(id: string): Promise<StripePaymentIntent> {
     return this.request("GET", `/v1/payment_intents/${encodeURIComponent(id)}?expand%5B%5D=latest_charge`);
+  }
+
+  cancelPaymentIntent(input: { paymentIntentId: string; idempotencyKey: string }): Promise<StripePaymentIntent> {
+    return this.request(
+      "POST",
+      `/v1/payment_intents/${encodeURIComponent(input.paymentIntentId)}/cancel`,
+      undefined,
+      input.idempotencyKey,
+    );
   }
 
   retrieveReader(id: string): Promise<StripeReader> {

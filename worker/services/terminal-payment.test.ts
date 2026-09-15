@@ -2,25 +2,41 @@ import { describe, expect, it, vi } from "vitest";
 import { paymentAttempts, transactions } from "@/db/schema";
 import {
   classifyReaderAction, decideExistingPaymentIntentAction, decidePolledPaymentReconciliation,
-  decideReaderDisplayRecovery, processAfterPaymentIntentPersistence, READER_DISPLAY_TIMEOUT_MS, shouldRecoverExpiredIdleReservation,
+  decideReaderDisplayRecovery, processAfterPaymentIntentPersistence, READER_DISPLAY_TIMEOUT_MS,
+  shouldDeferUnstartedPaymentReconciliation, shouldRecoverExpiredIdleReservation, shouldReplayUnrecordedReaderProcess,
 } from "./terminal-payment";
 
 describe("Terminal payment recovery", () => {
   it("does not process a duplicate Charge click while the reader is active", () => {
-    expect(decideExistingPaymentIntentAction({ attemptStatus: "WAITING_FOR_CUSTOMER", paymentIntentStatus: "requires_payment_method" })).toBe("SHOW_WAITING");
-    expect(decideExistingPaymentIntentAction({ attemptStatus: "PROCESSING", paymentIntentStatus: "processing" })).toBe("SHOW_PROCESSING");
+    expect(decideExistingPaymentIntentAction({
+      attemptStatus: "WAITING_FOR_CUSTOMER", paymentIntentStatus: "requires_payment_method",
+      readerAction: "PAYMENT_ACTIVE", readerPaymentIntentMatches: true, hasReaderOperation: true,
+    })).toBe("SHOW_WAITING");
+    expect(decideExistingPaymentIntentAction({
+      attemptStatus: "PROCESSING", paymentIntentStatus: "processing",
+      readerAction: "PAYMENT_ACTIVE", readerPaymentIntentMatches: true, hasReaderOperation: true,
+    })).toBe("SHOW_PROCESSING");
   });
 
   it("recovers the same PaymentIntent after browser refresh", () => {
-    expect(decideExistingPaymentIntentAction({ attemptStatus: "SENT_TO_READER", paymentIntentStatus: "requires_payment_method" })).toBe("SHOW_WAITING");
+    expect(decideExistingPaymentIntentAction({
+      attemptStatus: "SENT_TO_READER", paymentIntentStatus: "requires_payment_method",
+      readerAction: "PAYMENT_ACTIVE", readerPaymentIntentMatches: true, hasReaderOperation: false,
+    })).toBe("SHOW_WAITING");
   });
 
-  it("reuses a declined PaymentIntent when Stripe returns it to requires_payment_method", () => {
-    expect(decideExistingPaymentIntentAction({ attemptStatus: "FAILED", paymentIntentStatus: "requires_payment_method" })).toBe("PROCESS_REUSING_INTENT");
+  it("does not restart a definitively failed attempt", () => {
+    expect(decideExistingPaymentIntentAction({
+      attemptStatus: "FAILED", paymentIntentStatus: "requires_payment_method",
+      readerAction: "IDLE", readerPaymentIntentMatches: false, hasReaderOperation: true,
+    })).toBe("SHOW_FAILED");
   });
 
   it("reconciles success instead of starting another reader action", () => {
-    expect(decideExistingPaymentIntentAction({ attemptStatus: "PROCESSING", paymentIntentStatus: "succeeded" })).toBe("RECONCILE_SUCCESS");
+    expect(decideExistingPaymentIntentAction({
+      attemptStatus: "PROCESSING", paymentIntentStatus: "succeeded",
+      readerAction: "IDLE", readerPaymentIntentMatches: false, hasReaderOperation: true,
+    })).toBe("RECONCILE_SUCCESS");
   });
 
   it("recognizes the S710's in-progress cart as a display-only action", () => {
@@ -64,6 +80,33 @@ describe("Terminal payment recovery", () => {
     });
     expect(sequence).toEqual(["persisted", "processed"]);
     expect(result).toBe("reader-action");
+  });
+
+  it("replays only an unrecorded process transition with the same PaymentIntent and idempotency key", () => {
+    const transition = {
+      attemptStatus: "SENT_TO_READER" as const,
+      lastErrorCode: "READER_PROCESS_STARTING",
+      hasReaderOperation: false,
+      paymentIntentStatus: "requires_payment_method",
+      readerAction: "CART_DISPLAY" as const,
+    };
+    expect(shouldReplayUnrecordedReaderProcess(transition)).toBe(true);
+    expect(shouldReplayUnrecordedReaderProcess({ ...transition, hasReaderOperation: true })).toBe(false);
+    expect(shouldReplayUnrecordedReaderProcess({ ...transition, readerAction: "PAYMENT_ACTIVE" })).toBe(false);
+  });
+
+  it("does not let polling cancel a fresh one-click preparation before its PaymentIntent is mapped", () => {
+    const now = new Date("2026-09-15T18:36:24.500Z");
+    expect(shouldDeferUnstartedPaymentReconciliation({
+      attemptStatus: "READER_RESERVED",
+      attemptUpdatedAt: new Date("2026-09-15T18:36:24.000Z"),
+      now,
+    })).toBe(true);
+    expect(shouldDeferUnstartedPaymentReconciliation({
+      attemptStatus: "READER_RESERVED",
+      attemptUpdatedAt: new Date(now.getTime() - READER_DISPLAY_TIMEOUT_MS),
+      now,
+    })).toBe(false);
   });
 
   it("does not call process_payment_intent when persistence confirmation fails", async () => {

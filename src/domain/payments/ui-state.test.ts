@@ -2,14 +2,14 @@ import { describe, expect, it } from "vitest";
 import { paymentActivationUi, paymentPhaseLabel } from "./ui-state";
 
 describe("employee Terminal payment state", () => {
-  it("treats the informational cart as review-only until Start card payment", () => {
+  it("keeps the one-click flow active while the cart and reader are prepared", () => {
     const state = paymentActivationUi({
       hasActiveTransaction: true,
       paymentStatus: "SENDING_TO_TERMINAL",
       readerDisplayPending: true,
     });
-    expect(state).toEqual({ activationAllowed: true, readyToStart: true, active: false });
-    expect(paymentPhaseLabel("SENDING_TO_TERMINAL", false)).toBe("Ready to start card payment");
+    expect(state).toEqual({ activationAllowed: false, readyToStart: false, active: true });
+    expect(paymentPhaseLabel("SENDING_TO_TERMINAL", false)).toBe("Preparing terminal");
   });
 
   it("blocks duplicate activation while waiting for a card or processing", () => {
@@ -24,12 +24,12 @@ describe("employee Terminal payment state", () => {
     expect(paymentPhaseLabel("PAID", true)).toBe("Payment successful");
   });
 
-  it("allows a definitive decline to retry the same idempotent PaymentIntent", () => {
+  it("does not expose a second activation after a definitive decline", () => {
     expect(paymentActivationUi({
       hasActiveTransaction: true,
       paymentStatus: "FAILED",
       readerDisplayPending: false,
-    }).activationAllowed).toBe(true);
+    }).activationAllowed).toBe(false);
     expect(paymentPhaseLabel("FAILED", false)).toBe("Payment declined");
   });
 });

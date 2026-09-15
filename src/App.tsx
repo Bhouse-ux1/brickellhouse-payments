@@ -5,6 +5,7 @@ import {
   CalendarDays, Download, Landmark, LogOut, Minus, Plus, Printer, ReceiptText, Search, ShieldCheck, Thermometer, UserCog, Wind, Wrench, X,
 } from "lucide-react";
 import { calculateProcessingFee } from "@/domain/payments/processing-fee";
+import { sendIdempotentPaymentActivation } from "@/domain/payments/activation-request";
 import { meetsMinimumPayment, MINIMUM_PAYMENT_MESSAGE } from "@/domain/payments/minimum-payment";
 import { paymentActivationUi, paymentPhaseLabel } from "@/domain/payments/ui-state";
 import { productCatalog, type TrustedProduct } from "@/domain/products/catalog";
@@ -215,14 +216,19 @@ function NewTransaction() {
         sessionStorage.setItem("bh_active_transaction", transactionId);
         setActiveTransactionId(transactionId);
       }
-      const terminal = await authenticatedFetch(`/api/transactions/${transactionId}/payment-attempts`, { method: "POST" });
+      setPaymentStatus("SENDING_TO_TERMINAL");
+      setNotice("Preparing terminal…");
+      const terminal = await sendIdempotentPaymentActivation(() => authenticatedFetch(
+        `/api/transactions/${transactionId}/payment-attempts`,
+        { method: "POST" },
+      ));
       const terminalData = await terminal.json() as { paymentStatus?: string; displayStatus?: string; error?: string; code?: string; readerDisplayPending?: boolean };
       if (typeof terminalData.readerDisplayPending === "boolean") setReaderDisplayPending(terminalData.readerDisplayPending);
       if (terminalData.paymentStatus) setPaymentStatus(terminalData.paymentStatus);
       setTerminalCode(terminal.ok ? null : terminalData.code ?? null);
       setNotice(terminalData.displayStatus ?? terminalData.error ?? "Payment status is being checked. Do not start another charge.");
     } catch {
-      setNotice("The service is temporarily unavailable. No payment request was sent.");
+      setNotice("Connection interrupted. Payment status is being checked—do not press Charge again.");
     } finally {
       requestInFlight.current = false;
       setCharging(false);
@@ -263,7 +269,7 @@ function NewTransaction() {
         </div>
         <div className="totals"><div><span>Subtotal</span><b>{money.format(subtotal / 100)}</b></div><div><span>Processing fee</span><b>{money.format(fee / 100)}</b></div><div className="grand"><span>Total</span><b>{money.format(total / 100)}</b></div></div>
         {notice && <div className="notice" role="status">{notice}</div>}
-        <button className="charge" disabled={!canCharge || charging} onClick={prepareCharge}><CreditCard size={17}/>{charging ? "Preparing…" : paymentStatus === "FAILED" ? "Retry card payment" : readerDisplayPending || paymentStatus === "READY" ? "Start card payment" : paymentStatus === "WAITING_FOR_CUSTOMER" ? "Waiting for card…" : paymentStatus === "PROCESSING" ? "Processing payment…" : total ? `Review ${money.format(total / 100)} on S710` : "Review on S710"}</button>
+        <button className="charge" disabled={!canCharge || charging} onClick={prepareCharge}><CreditCard size={17}/>{charging || ["SENDING_TO_TERMINAL", "READY"].includes(paymentStatus) ? "Preparing terminal" : paymentStatus === "WAITING_FOR_CUSTOMER" ? "Waiting for card" : paymentStatus === "PROCESSING" ? "Processing payment" : paymentStatus === "PAID" ? "Payment successful" : `Charge ${money.format(total / 100)}`}</button>
         {activeTransactionId && <button className="cancelPayment" disabled={charging} onClick={async () => {
           setCharging(true);
           try {

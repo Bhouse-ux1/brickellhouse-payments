@@ -296,7 +296,7 @@ describe("Stripe reconciliation decisions", () => {
   it("uses current succeeded state instead of a delayed payment_failed event", async () => {
     const db = createEventDb([[attempt], [transaction]]);
     const finalizeSucceeded = vi.fn(async () => undefined);
-    const finalizeFailed = vi.fn(async () => undefined);
+    const finalizeFailed = vi.fn(async () => true);
     const result = await processStripeEvent({
       db: db as never,
       env: liveEnv as never,
@@ -324,7 +324,7 @@ describe("Stripe reconciliation decisions", () => {
     };
     const db = createEventDb([[attempt], [transaction]]);
     const finalizeSucceeded = vi.fn(async () => undefined);
-    const finalizeFailed = vi.fn(async () => undefined);
+    const finalizeFailed = vi.fn(async () => true);
     const result = await processStripeEvent({
       db: db as never,
       env: liveEnv as never,
@@ -345,7 +345,7 @@ describe("Stripe reconciliation decisions", () => {
   it("does not mark a delayed failure FAILED while current Stripe state is processing", async () => {
     const processingIntent = { ...ownedIntent, status: "processing", amount_received: 0, latest_charge: null };
     const db = createEventDb([[attempt], [transaction]]);
-    const finalizeFailed = vi.fn(async () => undefined);
+    const finalizeFailed = vi.fn(async () => true);
     const result = await processStripeEvent({
       db: db as never,
       env: liveEnv as never,
@@ -361,7 +361,7 @@ describe("Stripe reconciliation decisions", () => {
   it("still transitions a genuinely current failed state", async () => {
     const failedIntent = { ...ownedIntent, status: "requires_payment_method", amount_received: 0, latest_charge: null };
     const db = createEventDb([[attempt], [transaction]]);
-    const finalizeFailed = vi.fn(async () => undefined);
+    const finalizeFailed = vi.fn(async () => true);
     await processStripeEvent({
       db: db as never,
       env: liveEnv as never,

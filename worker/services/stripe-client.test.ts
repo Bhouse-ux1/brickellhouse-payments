@@ -50,6 +50,20 @@ describe("live Stripe boundary", () => {
     expect(fetcher).toHaveBeenCalledOnce();
   });
 
+  it("cancels an abandoned PaymentIntent with a stable idempotency key", async () => {
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toContain("/v1/payment_intents/pi_live/cancel");
+      expect(init?.method).toBe("POST");
+      expect(new Headers(init?.headers).get("idempotency-key")).toBe("stable-attempt-key:cancel-intent");
+      return new Response(JSON.stringify({ ...trustedIntent, status: "canceled", amount_received: 0 }), { status: 200 });
+    });
+    const client = createStripeTerminalClient(liveEnv, fetcher as typeof fetch);
+    await expect(client.cancelPaymentIntent({
+      paymentIntentId: "pi_live",
+      idempotencyKey: "stable-attempt-key:cancel-intent",
+    })).resolves.toMatchObject({ id: "pi_live", status: "canceled" });
+  });
+
   it("invokes the Stripe fetcher with Cloudflare's global receiver", async () => {
     const fetcher = vi.fn(function (this: typeof globalThis, url: string | URL | Request) {
       expect(this).toBe(globalThis);
