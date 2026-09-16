@@ -9,7 +9,7 @@ import { createDraftTransaction } from "@/services/transactions/create-draft";
 import { requireEmployee } from "@worker/middleware/require-employee";
 import {
   cancelTerminalPayment, clearTerminalDisplay, reconcileTerminalPayment, startTerminalPayment, TerminalFlowError,
-  setupPaymentView,
+  setupPaymentView, showTerminalBreakdown, isBreakdownReady, breakdownPaymentView,
 } from "@worker/services/terminal-payment";
 import type { WorkerEnvironment } from "@worker/types";
 import { deliverPaidTransactionNotifications, deliverPaidTransactionReceipt, queueReceiptResend } from "@worker/services/receipt-delivery";
@@ -76,18 +76,20 @@ transactionRoutes.get("/:id", async (c) => {
     sentAt: emailDeliveries.sentAt,
     attemptCount: emailDeliveries.attemptCount,
   }).from(emailDeliveries).where(and(eq(emailDeliveries.transactionId, transaction.id), eq(emailDeliveries.kind, "RESIDENT_RECEIPT"))).limit(1);
-  const setup = paymentAttempt && ["CREATED", "READER_RESERVED", "PAYMENT_INTENT_CREATED", "SENT_TO_READER"].includes(paymentAttempt.status) &&
+  const breakdownReady = isBreakdownReady(transaction.paymentStatus, paymentAttempt);
+  const setup = breakdownReady ? breakdownPaymentView(transaction.id) : paymentAttempt && ["CREATED", "READER_RESERVED", "PAYMENT_INTENT_CREATED", "SENT_TO_READER"].includes(paymentAttempt.status) &&
     ["DRAFT", "READY", "SENDING_TO_TERMINAL"].includes(transaction.paymentStatus)
     ? setupPaymentView(transaction.id, paymentAttempt.updatedAt) : null;
   return c.json({
     transaction, items, receipt: receipt ?? null,
     payment: {
       status: transaction.paymentStatus,
+      breakdownReady,
       displayStatus: setup?.displayStatus ?? employeePaymentStatus[transaction.paymentStatus],
       setupRecoveryRequired: setup?.setupRecoveryRequired ?? false,
       readerDisplayPending: transaction.paymentStatus === "SENDING_TO_TERMINAL" &&
         paymentAttempt?.status === "READER_RESERVED" && !paymentAttempt.lastErrorCode,
-      recoveryRequired: Boolean(paymentAttempt?.status === "READER_RESERVED" &&
+      recoveryRequired: Boolean(!breakdownReady && paymentAttempt?.status === "READER_RESERVED" &&
         !paymentAttempt.stripePaymentIntentId && transaction.paymentStatus !== "SENDING_TO_TERMINAL"),
       recoverable: Boolean(paymentAttempt && !["SUCCEEDED", "CANCELED", "EXPIRED"].includes(paymentAttempt.status)),
     },
@@ -115,6 +117,17 @@ transactionRoutes.post("/", async (c) => {
   } catch (error) {
     if (error instanceof ZodError) return c.json({ error: "Invalid transaction", issues: error.issues }, 400);
     if (error instanceof FinancialValidationError) return c.json({ error: error.message, code: error.code }, 400);
+    throw error;
+  }
+});
+
+transactionRoutes.post("/:id/payment-attempts/show-breakdown", async (c) => {
+  const db = createDatabase(c.env);
+  if (!db) return c.json({ error: "Terminal payment storage is not configured" }, 503);
+  try {
+    return c.json(await showTerminalBreakdown({ db, env: c.env, transactionId: c.req.param("id") }));
+  } catch (error) {
+    if (error instanceof TerminalFlowError) return c.json({ error: error.message, code: error.code }, error.status);
     throw error;
   }
 });

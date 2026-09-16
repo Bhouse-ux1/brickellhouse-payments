@@ -24,15 +24,18 @@ function mockApi(initialStatus = "SENDING_TO_TERMINAL") {
       if (cancel) return cancel();
       statuses.set(id, "CANCELED"); return json({ paymentStatus: "CANCELED" });
     }
+    if (path.endsWith("/show-breakdown")) {
+      statuses.set(id, "READY"); return json({ paymentStatus: "READY", breakdownReady: true, displayStatus: "Resident may review the breakdown and present their card." });
+    }
     if (path.endsWith("/payment-attempts")) {
       if (activate) return activate();
       statuses.set(id, "WAITING_FOR_CUSTOMER"); return json({ paymentStatus: "WAITING_FOR_CUSTOMER", displayStatus: "Waiting for card" });
     }
-    if (path.endsWith("/reconcile")) return json({ paymentStatus: statuses.get(id), displayStatus: "Preparing terminal" });
+    if (path.endsWith("/reconcile")) return json({ paymentStatus: statuses.get(id), breakdownReady: statuses.get(id) === "READY", displayStatus: "Preparing terminal" });
     if (path.startsWith("/api/transactions/")) return json({
       transaction: { unitNumber: "TEST", customerEmail: "resident@example.invalid", totalCents: 71, cardBrand: "visa", cardLastFour: "4242" },
       items: [{ productId: "black_white_printing", productNameSnapshot: "Black & White Printing", quantity: 4, unitPriceCentsSnapshot: 10 }],
-      payment: { status: statuses.get(id), displayStatus: recovery ? "Terminal setup needs attention. Select Cancel to check whether it can be canceled." : statuses.get(id),
+      payment: { status: statuses.get(id), breakdownReady: statuses.get(id) === "READY", displayStatus: recovery ? "Terminal setup needs attention. Select Cancel to check whether it can be canceled." : statuses.get(id),
         readerDisplayPending: statuses.get(id) === "SENDING_TO_TERMINAL", setupRecoveryRequired: recovery, recoveryRequired: false },
     });
     throw new Error(`Unexpected local test request: ${path}`);
@@ -41,12 +44,14 @@ function mockApi(initialStatus = "SENDING_TO_TERMINAL") {
   return { fetcher, statuses, setActivation: (fn: () => Promise<Response>) => { activate = fn; }, setCancel: (fn: () => Promise<Response>) => { cancel = fn; }, showRecovery: () => { recovery = true; } };
 }
 function mount() { render(<MemoryRouter><App /></MemoryRouter>); }
-async function fillAndCharge() {
+async function fillAndCharge(process = true) {
   fireEvent.change(await screen.findByLabelText("Unit number"), { target: { value: "NEXT" } });
   fireEvent.change(screen.getByLabelText("Resident email"), { target: { value: "next@example.invalid" } });
   fireEvent.click(await screen.findByRole("button", { name: /Black & White Printing/ }));
   fireEvent.change(screen.getByLabelText("Black & White Printing quantity"), { target: { value: "4" } });
-  fireEvent.click(screen.getByRole("button", { name: "Charge $0.71" }));
+  fireEvent.click(screen.getByRole("button", { name: "Show Breakdown" }));
+  const processButton = await screen.findByRole("button", { name: "Process Payment" });
+  if (process) fireEvent.click(processButton);
   await screen.findByRole("button", { name: "Cancel" });
 }
 afterEach(() => { cleanup(); sessionStorage.clear(); vi.unstubAllGlobals(); });
@@ -94,4 +99,32 @@ describe("employee payment lifecycle (local mocked DOM)", () => {
     expect(sessionStorage.getItem("bh_active_transaction")).toBe("first");
     expect((screen.getByLabelText("Unit number") as HTMLInputElement).disabled).toBe(true);
   });
+  it("Show Breakdown enables Process Payment without any card-presented signal and does not process automatically", async () => {
+    const api = mockApi(); mount(); await fillAndCharge(false);
+    expect(api.fetcher.mock.calls.filter(([path]) => String(path).endsWith("/show-breakdown"))).toHaveLength(1);
+    expect(api.fetcher.mock.calls.filter(([path]) => String(path).endsWith("/payment-attempts"))).toHaveLength(0);
+    expect((screen.getByRole("button", { name: "Process Payment" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText(/has.*tapped/i)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" })); await screen.findByText("Payment canceled.");
+    expect(api.fetcher.mock.calls.filter(([path]) => String(path).endsWith("/payment-attempts"))).toHaveLength(0);
+  });
+
+  it("restores the review stage after refresh without showing or processing again", async () => {
+    const api = mockApi("READY"); sessionStorage.setItem("bh_active_transaction", "first"); mount();
+    await screen.findByRole("button", { name: "Process Payment" });
+    expect(api.fetcher.mock.calls.filter(([path]) => String(path).endsWith("/show-breakdown") || String(path).endsWith("/payment-attempts"))).toHaveLength(0);
+  });
+
+  it("disables Process Payment immediately and never resubmits a pending operation", async () => {
+    const api = mockApi(); let complete!: (response: Response) => void;
+    api.setActivation(() => new Promise(resolve => { complete = resolve; })); mount(); await fillAndCharge(false);
+    const process = screen.getByRole("button", { name: "Process Payment" });
+    fireEvent.click(process); fireEvent.click(process);
+    expect((process as HTMLButtonElement).disabled).toBe(true);
+    await waitFor(() => expect(api.fetcher.mock.calls.filter(([path]) => String(path).endsWith("/payment-attempts"))).toHaveLength(1));
+    await act(async () => { complete(json({ paymentStatus: "WAITING_FOR_CUSTOMER", displayStatus: "Payment in progress" })); });
+    expect(screen.queryByRole("button", { name: "Process Payment" })).toBeNull();
+    expect(api.fetcher.mock.calls.filter(([path]) => String(path).endsWith("/payment-attempts"))).toHaveLength(1);
+  });
+
 });

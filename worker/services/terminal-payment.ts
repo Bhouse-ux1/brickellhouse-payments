@@ -95,6 +95,7 @@ export type EmployeePaymentView = {
   displayStatus: string;
   readerDisplayPending: boolean;
   setupRecoveryRequired?: boolean;
+  breakdownReady?: boolean;
 };
 
 async function getOrCreatePaymentAttempt(db: Database, transaction: Transaction): Promise<PaymentAttempt> {
@@ -148,7 +149,7 @@ async function setTrustedReaderDisplay(input: {
   validateLiveReader(reader, input.readerId, input.locationId);
   // On a physical S710, an acknowledged cart remains in_progress for as long
   // as it is visible. That state enables S710 pre-dip: the resident may present
-  // one card while this request continues to the same PaymentIntent.
+  // one card before the separate Process Payment request.
   validateReaderDisplayState(reader, input.cart);
   return reader;
 }
@@ -273,11 +274,12 @@ async function recoverExpiredIdleReservation(input: {
   if (!input.lockedPaymentAttemptId || !input.lockExpiresAt || input.lockExpiresAt.getTime() > now.getTime()) return false;
   const [locked] = await input.db.select({
     attemptStatus: paymentAttempts.status,
+    lastErrorCode: paymentAttempts.lastErrorCode,
     transactionId: paymentAttempts.transactionId,
     stripePaymentIntentId: paymentAttempts.stripePaymentIntentId,
     stripeReaderOperationId: paymentAttempts.stripeReaderOperationId,
   }).from(paymentAttempts).where(eq(paymentAttempts.id, input.lockedPaymentAttemptId)).limit(1);
-  if (!locked) return false;
+  if (!locked || locked.lastErrorCode) return false;
   try {
     const stripe = input.stripe ?? createStripeTerminalClient(input.env);
     const reader = await stripe.retrieveReader(input.env.STRIPE_TERMINAL_READER_ID!);
@@ -313,6 +315,7 @@ async function recoverExpiredIdleReservation(input: {
         eq(paymentAttempts.status, "READER_RESERVED"),
         isNull(paymentAttempts.stripePaymentIntentId),
         isNull(paymentAttempts.stripeReaderOperationId),
+        isNull(paymentAttempts.lastErrorCode),
       )).returning({ id: paymentAttempts.id });
       if (!expired) throw new Error("Stale reader reservation changed during recovery.");
       await tx.update(transactions).set({
@@ -371,7 +374,17 @@ async function currentPaymentView(db: Database, transactionId: string): Promise<
     const [attempt] = await db.select({ id: paymentAttempts.id }).from(paymentAttempts).where(eq(paymentAttempts.transactionId, transactionId)).orderBy(desc(paymentAttempts.attemptNumber)).limit(1);
     if (attempt) await releaseReaderReservation(db, attempt.id);
   }
-  return view(transactionId, transaction.paymentStatus);
+  const [attempt] = await db.select().from(paymentAttempts).where(eq(paymentAttempts.transactionId, transactionId)).orderBy(desc(paymentAttempts.attemptNumber)).limit(1);
+  return isBreakdownReady(transaction.paymentStatus, attempt) ? breakdownPaymentView(transactionId) : view(transactionId, transaction.paymentStatus);
+}
+
+export function isBreakdownReady(status: string, attempt?: { status: string; lastErrorCode: string | null; stripePaymentIntentId: string | null }) {
+  return status === "READY" && attempt?.status === "READER_RESERVED" && attempt.lastErrorCode === "BREAKDOWN_READY" && !attempt.stripePaymentIntentId;
+}
+
+export function breakdownPaymentView(transactionId: string): EmployeePaymentView {
+  return { ...view(transactionId, "READY"), breakdownReady: true, readerDisplayPending: false, setupRecoveryRequired: false,
+    displayStatus: "Resident may review the breakdown and present their card." };
 }
 
 // A Reader response may arrive after a webhook or cancellation. Record identity
@@ -403,9 +416,12 @@ async function recordReaderOperation(input: {
   });
 }
 
-export async function startTerminalPayment(input: {
-  db: Database; env: WorkerBindings; transactionId: string; stripe?: StripeTerminalClient;
-}): Promise<EmployeePaymentView> {
+type TerminalActionInput = { db: Database; env: WorkerBindings; transactionId: string; stripe?: StripeTerminalClient };
+
+export const showTerminalBreakdown = (input: TerminalActionInput) => terminalAction(input, "SHOW");
+export const startTerminalPayment = (input: TerminalActionInput) => terminalAction(input, "PROCESS");
+
+async function terminalAction(input: TerminalActionInput, action: "SHOW" | "PROCESS"): Promise<EmployeePaymentView> {
   const configurationError = stripeLiveConfigurationError(input.env);
   if (configurationError) throw new TerminalFlowError("TERMINAL_NOT_CONFIGURED", configurationError, 503);
   const [transaction] = await input.db.select().from(transactions).where(eq(transactions.id, input.transactionId)).limit(1);
@@ -420,6 +436,12 @@ export async function startTerminalPayment(input: {
   let attempt = await getOrCreatePaymentAttempt(input.db, transaction);
   if (["SUCCEEDED", "CANCELED", "FAILED", "EXPIRED"].includes(attempt.status)) return currentPaymentView(input.db, transaction.id);
   if (attempt.expectedAmountCents !== readerCart.totalCents) throw new TerminalFlowError("AMOUNT_MISMATCH", "Stored payment amount is inconsistent");
+  if (action === "SHOW" && attempt.stripePaymentIntentId) return currentPaymentView(input.db, transaction.id);
+  if (action === "SHOW" && isBreakdownReady(transaction.paymentStatus, attempt)) return reconcileTerminalPayment(input);
+  if (action === "PROCESS" && !attempt.stripePaymentIntentId && !isBreakdownReady(transaction.paymentStatus, attempt)) {
+    if (attempt.lastErrorCode) return currentPaymentView(input.db, transaction.id);
+    throw new TerminalFlowError("BREAKDOWN_REQUIRED", "Show Breakdown before processing payment.");
+  }
   let reservation = await reserveConfiguredReader(input.db, input.env, attempt.id);
   if (reservation.status === "TERMINAL_BUSY") {
     const recovered = await recoverExpiredIdleReservation({ db: input.db, env: input.env, stripe: input.stripe,
@@ -431,11 +453,11 @@ export async function startTerminalPayment(input: {
   const internalReaderId = reservation.readerId;
   const stripe = input.stripe ?? createStripeTerminalClient(input.env);
   let setupOwned = false;
-  if (!attempt.stripePaymentIntentId) {
+  if (action === "SHOW" && !attempt.stripePaymentIntentId) {
     const [claimed] = await input.db.update(paymentAttempts).set({ status: "READER_RESERVED", terminalReaderId: internalReaderId,
       lastErrorCode: "SETUP_STARTING", lastErrorMessage: null, updatedAt: new Date() }).where(and(
         eq(paymentAttempts.id, attempt.id), inArray(paymentAttempts.status, ["CREATED", "READER_RESERVED"]),
-        isNull(paymentAttempts.stripePaymentIntentId), isNull(paymentAttempts.lastErrorCode),
+        isNull(paymentAttempts.stripePaymentIntentId), or(isNull(paymentAttempts.lastErrorCode), eq(paymentAttempts.lastErrorCode, "SETUP_FAILED")),
       )).returning();
     if (!claimed) return currentPaymentView(input.db, transaction.id);
     attempt = claimed;
@@ -450,18 +472,41 @@ export async function startTerminalPayment(input: {
     validateLiveReader(reader, input.env.STRIPE_TERMINAL_READER_ID!, input.env.STRIPE_TERMINAL_LOCATION_ID!);
     if (reader.status !== "online") throw new TerminalFlowError("TERMINAL_OFFLINE", employeePaymentStatus.TERMINAL_OFFLINE, 503);
     let paymentIntent: StripePaymentIntent;
-    if (!attempt.stripePaymentIntentId) {
-      const action = classifyReaderAction(reader);
-      if (action === "CART_DISPLAY") validateReaderDisplayState(reader, readerCart);
-      else if (action === "IDLE") reader = await setTrustedReaderDisplay({ stripe, readerId: reader.id,
+    if (action === "SHOW") {
+      const readerAction = classifyReaderAction(reader);
+      if (readerAction === "CART_DISPLAY") validateReaderDisplayState(reader, readerCart);
+      else if (readerAction === "IDLE") reader = await setTrustedReaderDisplay({ stripe, readerId: reader.id,
         locationId: input.env.STRIPE_TERMINAL_LOCATION_ID!, idempotencyKey: attempt.idempotencyKey, cart: readerCart });
       else throw new TerminalFlowError("TERMINAL_UNCERTAIN", "Terminal state needs reconciliation.", 503);
-      // Own display -> own payment preparation is expected. Polling must not
-      // write this state, and Cancel cannot erase an in-flight intent creation.
-      const [creating] = await input.db.update(paymentAttempts).set({ lastErrorCode: "INTENT_CREATING", updatedAt: new Date() }).where(and(
-        eq(paymentAttempts.id, attempt.id), eq(paymentAttempts.status, "READER_RESERVED"),
-        eq(paymentAttempts.lastErrorCode, "SETUP_STARTING"), isNull(paymentAttempts.stripePaymentIntentId),
-      )).returning();
+      await input.db.transaction(async tx => {
+        const [displayed] = await tx.update(paymentAttempts).set({ lastErrorCode: "BREAKDOWN_READY", updatedAt: new Date() }).where(and(
+          eq(paymentAttempts.id, attempt.id), eq(paymentAttempts.status, "READER_RESERVED"),
+          eq(paymentAttempts.lastErrorCode, "SETUP_STARTING"), isNull(paymentAttempts.stripePaymentIntentId),
+        )).returning();
+        if (!displayed) return;
+        const [ready] = await tx.update(transactions).set({ paymentStatus: "READY", updatedAt: new Date() }).where(and(
+          eq(transactions.id, transaction.id), eq(transactions.paymentStatus, "SENDING_TO_TERMINAL"), isNull(transactions.stripePaymentIntentId),
+        )).returning();
+        if (!ready) throw new Error("Display state changed before acknowledgement.");
+      });
+      return currentPaymentView(input.db, transaction.id);
+    }
+    if (!attempt.stripePaymentIntentId) {
+      // Pre-dip is invisible to the app. Validate the trusted display, then
+      // process normally; never clear/re-set it or ask whether a card was shown.
+      validateReaderDisplayState(reader, readerCart);
+      const creating = await input.db.transaction(async tx => {
+        const [claimed] = await tx.update(paymentAttempts).set({ lastErrorCode: "INTENT_CREATING", updatedAt: new Date() }).where(and(
+          eq(paymentAttempts.id, attempt.id), eq(paymentAttempts.status, "READER_RESERVED"),
+          eq(paymentAttempts.lastErrorCode, "BREAKDOWN_READY"), isNull(paymentAttempts.stripePaymentIntentId),
+        )).returning();
+        if (!claimed) return null;
+        const [sending] = await tx.update(transactions).set({ paymentStatus: "SENDING_TO_TERMINAL", updatedAt: new Date() }).where(and(
+          eq(transactions.id, transaction.id), eq(transactions.paymentStatus, "READY"), isNull(transactions.stripePaymentIntentId),
+        )).returning();
+        if (!sending) throw new Error("Transaction changed before processing.");
+        return claimed;
+      });
       if (!creating) return currentPaymentView(input.db, transaction.id);
       attempt = creating;
       paymentIntent = await stripe.createPaymentIntent({ amountCents: readerCart.totalCents, idempotencyKey: attempt.idempotencyKey,
@@ -487,12 +532,17 @@ export async function startTerminalPayment(input: {
         // Do not issue another process command merely because its response was lost.
         return currentPaymentView(input.db, transaction.id);
       }
-      if (classifyReaderAction(reader) === "CART_DISPLAY") validateReaderDisplayState(reader, readerCart);
-      else if (classifyReaderAction(reader) !== "IDLE") throw new TerminalFlowError("TERMINAL_UNCERTAIN", "Terminal state needs reconciliation.", 503);
+      validateReaderDisplayState(reader, readerCart);
     }
     if (paymentIntent.status !== "requires_payment_method" || paymentIntent.amount_received !== 0 || paymentIntent.payment_method || paymentIntent.latest_charge) {
       throw new TerminalFlowError("TERMINAL_UNCERTAIN", "Payment status needs reconciliation.", 503);
     }
+    // Creation can take time. Recheck the actual display total immediately
+    // before the single process claim; displayed amounts never set the charge.
+    reader = await stripe.retrieveReader(input.env.STRIPE_TERMINAL_READER_ID!);
+    validateLiveReader(reader, input.env.STRIPE_TERMINAL_READER_ID!, input.env.STRIPE_TERMINAL_LOCATION_ID!);
+    if (reader.status !== "online") throw new TerminalFlowError("TERMINAL_OFFLINE", employeePaymentStatus.TERMINAL_OFFLINE, 503);
+    validateReaderDisplayState(reader, readerCart);
     const processClaimed = await claimReaderProcessTransition({ db: input.db, attemptId: attempt.id });
     if (!processClaimed) return currentPaymentView(input.db, transaction.id);
     const processedReader = await processAfterPaymentIntentPersistence({
@@ -554,6 +604,10 @@ export async function reconcileTerminalPayment(input: {
     }
     const [latest] = await input.db.select().from(paymentAttempts).where(eq(paymentAttempts.id, attempt.id)).limit(1);
     if (!latest || latest.status !== attempt.status || latest.stripePaymentIntentId !== attempt.stripePaymentIntentId || latest.lastErrorCode !== attempt.lastErrorCode) return currentPaymentView(input.db, transaction.id);
+    if (isBreakdownReady(transaction.paymentStatus, latest)) {
+      if (readerAction !== "CART_DISPLAY" || reader.status !== "online" || reservation?.lockPaymentAttemptId !== attempt.id) throw uncertain();
+      return breakdownPaymentView(transaction.id);
+    }
     return setupPaymentView(transaction.id, attempt.updatedAt);
   }
   const paymentIntent = await stripe.retrievePaymentIntent(attempt.stripePaymentIntentId);
@@ -668,9 +722,9 @@ export async function cancelTerminalPayment(input: {
     return view(transaction.id, "PAID");
   }
   const observations = await input.db.select({ status: terminalReaderObservations.actionStatus }).from(terminalReaderObservations).where(eq(terminalReaderObservations.paymentAttemptId, attempt.id));
-  if (observations.some(o => o.status === "succeeded") || (readerIntentId(reader) === attempt.stripePaymentIntentId && reader.action?.status === "succeeded")) throw uncertain();
+  if (observations.some(o => o.status === "succeeded") || (attempt.stripePaymentIntentId && readerIntentId(reader) === attempt.stripePaymentIntentId && reader.action?.status === "succeeded")) throw uncertain();
   if (!paymentIntent && (attempt.stripeReaderOperationId || observations.length || !["CREATED", "READER_RESERVED"].includes(attempt.status) ||
-    (attempt.lastErrorCode && !["SETUP_FAILED", "CANCEL_STARTING"].includes(attempt.lastErrorCode)))) throw uncertain();
+    (attempt.lastErrorCode && !["SETUP_FAILED", "BREAKDOWN_READY", "CANCEL_STARTING"].includes(attempt.lastErrorCode)))) throw uncertain();
   if (paymentIntent && (!["requires_payment_method", "canceled"].includes(paymentIntent.status) ||
     paymentIntent.payment_method !== null || paymentIntent.latest_charge !== null || paymentIntent.amount_received !== 0)) throw uncertain();
   const [reservation] = await input.db.select().from(terminalReaders).where(eq(terminalReaders.stripeReaderId, input.env.STRIPE_TERMINAL_READER_ID!)).limit(1);
@@ -746,37 +800,9 @@ export async function expireAbandonedReaderDisplays(input: {
   stripe?: StripeTerminalClient;
   now?: Date;
 }): Promise<{ expired: number; deferred: number }> {
-  const db = input.db ?? createDatabase(input.env);
-  if (!db || stripeLiveConfigurationError(input.env)) return { expired: 0, deferred: 0 };
-  const cutoff = new Date((input.now ?? new Date()).getTime() - READER_DISPLAY_TIMEOUT_MS);
-  const candidates = await db.select({ transactionId: transactions.id }).from(paymentAttempts)
-    .innerJoin(transactions, eq(transactions.id, paymentAttempts.transactionId))
-    .where(and(
-      eq(paymentAttempts.status, "READER_RESERVED"),
-      isNull(paymentAttempts.stripePaymentIntentId),
-      isNull(paymentAttempts.lastErrorCode),
-      eq(transactions.paymentStatus, "SENDING_TO_TERMINAL"),
-      isNull(transactions.stripePaymentIntentId),
-      lte(paymentAttempts.updatedAt, cutoff),
-    )).limit(10);
-  let expired = 0;
-  let deferred = 0;
-  const stripe = input.stripe ?? createStripeTerminalClient(input.env);
-  for (const candidate of candidates) {
-    try {
-      await clearTerminalDisplay({
-        db, env: input.env, stripe,
-        transactionId: candidate.transactionId,
-        reason: "display_timeout",
-      });
-      expired += 1;
-    } catch (error) {
-      deferred += 1;
-      console.error("Abandoned reader display was left untouched after reconciliation", {
-        transactionId: candidate.transactionId,
-        message: error instanceof Error ? error.message : "Unknown display reconciliation failure",
-      });
-    }
-  }
-  return { expired, deferred };
+  // A review stage may contain an invisible pre-dip. Only an explicit employee
+  // Cancel can clear it. Retain this scheduled-handler interface for deployment
+  // compatibility; time alone never abandons a displayed breakdown.
+  void input;
+  return { expired: 0, deferred: 0 };
 }

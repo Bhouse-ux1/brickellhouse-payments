@@ -2,13 +2,20 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { eq } from "drizzle-orm";
 import { emailDeliveries, paymentAttempts, stripeEvents, terminalReaderObservations, terminalReaders, transactions } from "@/db/schema";
 import { createPaymentTestDatabase } from "@worker/test-support/payment-database";
-import { cancelTerminalPayment, reconcileTerminalPayment, startTerminalPayment } from "./terminal-payment";
+import { cancelTerminalPayment, reconcileTerminalPayment, startTerminalPayment as processTerminalPayment, showTerminalBreakdown, expireAbandonedReaderDisplays } from "./terminal-payment";
 import { processStripeEvent } from "./stripe-reconciliation";
 import { deliverPaidTransactionNotifications } from "./receipt-delivery";
 import type { StripePaymentIntent, StripeReader, StripeTerminalClient } from "./stripe-client";
 
 const env = { STRIPE_SECRET_KEY: "rk_live_placeholder", STRIPE_LIVE_MODE_ONLY: "true", STRIPE_TERMINAL_READER_ID: "tmr_local", STRIPE_TERMINAL_LOCATION_ID: "tml_local", PAYMENT_NOTIFICATION_EMAIL: "management@example.invalid" };
+async function startTerminalPayment(input: Parameters<typeof processTerminalPayment>[0]) {
+  await showTerminalBreakdown(input);
+  return processTerminalPayment(input);
+}
+
 function terminal() {
+  let savedCard = false;
+  let presentations = 0;
   let reader: StripeReader = { id: "tmr_local", object: "terminal.reader", location: "tml_local", livemode: true, status: "online", action: null };
   const intents = new Map<string, StripePaymentIntent>();
   const creationKeys = new Map<string, string>();
@@ -34,6 +41,7 @@ function terminal() {
       if (intents.get(input.paymentIntentId)?.status === "canceled") throw new Error("Intent canceled");
       processKeys.add(input.idempotencyKey);
       reader.action = { type: "process_payment_intent", status: "in_progress", process_payment_intent: { payment_intent: input.paymentIntentId } };
+      if (savedCard) { savedCard = false; succeed(input.paymentIntentId); }
       return structuredClone(reader);
     }),
     cancelPaymentIntent: vi.fn(async (input: Parameters<StripeTerminalClient["cancelPaymentIntent"]>[0]) => {
@@ -42,18 +50,30 @@ function terminal() {
       intent.status = "canceled";
       return structuredClone(intent);
     }),
-    cancelReaderAction: vi.fn(async () => { reader.action = null; return structuredClone(reader); }),
+    cancelReaderAction: vi.fn(async () => { savedCard = false; reader.action = null; return structuredClone(reader); }),
   } satisfies StripeTerminalClient;
-  return { stripe, intents, processKeys, reader: () => reader, setReader: (value: StripeReader) => { reader = value; },
-    succeed(id: string) {
-      const intent = intents.get(id)!;
-      intent.status = "succeeded"; intent.amount_received = intent.amount; intent.payment_method = "pm_local";
-      intent.latest_charge = { id: `ch_${id}`, object: "charge", payment_intent: id, paid: true, captured: true, livemode: true,
-        amount: intent.amount, amount_captured: intent.amount, currency: "usd", payment_method_details: { card_present: { brand: "visa", last4: "4242" } } };
-      reader.action = { type: "process_payment_intent", status: "succeeded", process_payment_intent: { payment_intent: id } };
+  function succeed(id: string) {
+    const intent = intents.get(id)!;
+    intent.status = "succeeded"; intent.amount_received = intent.amount; intent.payment_method = "pm_local";
+    intent.latest_charge = { id: `ch_${id}`, object: "charge", payment_intent: id, paid: true, captured: true, livemode: true,
+      amount: intent.amount, amount_captured: intent.amount, currency: "usd", payment_method_details: { card_present: { brand: "visa", last4: "4242" } } };
+    reader.action = { type: "process_payment_intent", status: "succeeded", process_payment_intent: { payment_intent: id } };
+  }
+  return { stripe, intents, processKeys, reader: () => reader, setReader: (value: StripeReader) => { reader = value; }, succeed,
+    presentations: () => presentations,
+    presentCard() {
+      presentations++;
+      // Reader-internal state only: pre-dip changes no API response or event.
+      if (reader.action?.type === "set_reader_display") savedCard = true;
+      else {
+        const id = reader.action?.process_payment_intent?.payment_intent;
+        if (typeof id !== "string") throw new Error("No active local payment");
+        succeed(id);
+      }
     },
   };
 }
+
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
 
 describe("repeated payments and SQL race regressions", { timeout: 20_000 }, () => {
@@ -117,7 +137,7 @@ describe("repeated payments and SQL race regressions", { timeout: 20_000 }, () =
     expect(t.stripe.processPaymentIntent).toHaveBeenCalledOnce();
   });
 
-  it("a duplicate Charge during display setup issues one intent and one process request", async () => {
+  it("duplicate Show Breakdown and Process Payment requests issues one intent and one process request", async () => {
     const t = terminal(); const draft = await testDb.draft(); const captured = deferred(); const release = deferred();
     const display = t.stripe.setReaderDisplay.getMockImplementation()!;
     t.stripe.setReaderDisplay.mockImplementation(async input => { captured.resolve(); await release.promise; return display(input); });
@@ -240,4 +260,121 @@ describe("repeated payments and SQL race regressions", { timeout: 20_000 }, () =
     expect((await startTerminalPayment(input)).paymentStatus).toBe("CANCELED");
     expect(t.stripe.createPaymentIntent).not.toHaveBeenCalled(); expect(t.stripe.setReaderDisplay).not.toHaveBeenCalled(); expect(await locks()).toHaveLength(0);
   });
+  it.each(["before", "after"])("one card presented %s Process Payment converges on one PAID transaction and idempotent receipts", async timing => {
+    const t = terminal(); const draft = await testDb.draft();
+    const input = { db: testDb.db, env, stripe: t.stripe, transactionId: draft.id };
+    const shown = await showTerminalBreakdown(input);
+    expect(shown).toMatchObject({ breakdownReady: true, paymentStatus: "READY", displayStatus: "Resident may review the breakdown and present their card." });
+    expect(t.intents.size).toBe(0); expect(t.stripe.processPaymentIntent).not.toHaveBeenCalled();
+    const beforeTap = await t.stripe.retrieveReader();
+    if (timing === "before") t.presentCard();
+    expect(await t.stripe.retrieveReader()).toEqual(beforeTap);
+    expect(await testDb.db.select().from(terminalReaderObservations)).toHaveLength(0);
+    expect((await reconcileTerminalPayment(input)).breakdownReady).toBe(true);
+    // A repeated display request and an allowed trusted display update preserve
+    // the logical attempt and the Reader's invisible stored payment method.
+    const originalAttempt = await attemptFor(draft.id);
+    await showTerminalBreakdown(input);
+    const displayInput = t.stripe.setReaderDisplay.mock.calls[0][0];
+    await t.stripe.setReaderDisplay(displayInput);
+    expect((await attemptFor(draft.id)).id).toBe(originalAttempt.id);
+    await processTerminalPayment(input);
+    await processTerminalPayment(input);
+    if (timing === "after") t.presentCard();
+    const attempt = await attemptFor(draft.id);
+    const event = { id: `evt_${timing}`, object: "event" as const, type: "payment_intent.succeeded", livemode: true, data: { object: t.intents.get(attempt.stripePaymentIntentId!)! } };
+    await processStripeEvent({ db: testDb.db, env, stripe: t.stripe, event, rawBody: JSON.stringify(event) });
+    await reconcileTerminalPayment(input);
+    await processStripeEvent({ db: testDb.db, env, stripe: t.stripe, event, rawBody: JSON.stringify(event) });
+    expect(await statusFor(draft.id)).toBe("PAID"); expect(await locks()).toHaveLength(0);
+    expect((await attemptFor(draft.id)).status).toBe("SUCCEEDED");
+    expect(t.presentations()).toBe(1);
+    expect(t.stripe.createPaymentIntent).toHaveBeenCalledOnce(); expect(t.stripe.processPaymentIntent).toHaveBeenCalledOnce();
+    expect(t.intents.size).toBe(1); expect(t.processKeys.size).toBe(1);
+    expect(t.stripe.cancelReaderAction).not.toHaveBeenCalled(); expect(t.stripe.cancelPaymentIntent).not.toHaveBeenCalled();
+    expect(t.stripe.setReaderDisplay).toHaveBeenCalledTimes(2); // first display plus explicit trusted update only
+    const emailFetch = vi.fn(async () => new Response(JSON.stringify({ id: crypto.randomUUID() }), { status: 200 }));
+    const delivery = { db: testDb.db, env: { ...env, RESEND_API_KEY: "re_placeholder", EMAIL_FROM: "payments@example.invalid" }, transactionId: draft.id, fetcher: emailFetch };
+    await Promise.all([deliverPaidTransactionNotifications(delivery), deliverPaidTransactionNotifications(delivery)]);
+    await deliverPaidTransactionNotifications(delivery);
+    expect(emailFetch).toHaveBeenCalledTimes(2);
+    expect((await testDb.db.select().from(emailDeliveries)).map(row => row.kind).sort()).toEqual(["MANAGEMENT_PAYMENT_CONFIRMATION", "RESIDENT_RECEIPT"]);
+  });
+
+  it("preserves an invisible pre-dip across a long review, polling, scheduled cleanup and expired reservation", async () => {
+    const t = terminal(); const draft = await testDb.draft(); const input = { db: testDb.db, env, stripe: t.stripe, transactionId: draft.id };
+    await showTerminalBreakdown(input); t.presentCard();
+    const old = new Date(Date.now() - 3_600_000);
+    await testDb.db.update(paymentAttempts).set({ updatedAt: old }).where(eq(paymentAttempts.transactionId, draft.id));
+    await testDb.db.update(terminalReaders).set({ lockExpiresAt: old });
+    expect(await expireAbandonedReaderDisplays(input)).toEqual({ expired: 0, deferred: 0 });
+    expect(await reconcileTerminalPayment(input)).toMatchObject({ breakdownReady: true, setupRecoveryRequired: false });
+    const other = await testDb.draft();
+    await expect(showTerminalBreakdown({ ...input, transactionId: other.id })).rejects.toThrow(/reserved/);
+    await processTerminalPayment(input); await reconcileTerminalPayment(input);
+    expect(await statusFor(draft.id)).toBe("PAID"); expect(t.presentations()).toBe(1);
+    expect(t.stripe.setReaderDisplay).toHaveBeenCalledOnce(); expect(t.stripe.processPaymentIntent).toHaveBeenCalledOnce();
+    expect(t.stripe.cancelReaderAction).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("explicit Cancel before processing clears the display and abandons with no PI (pre-dip=%s)", async preDip => {
+    const t = terminal(); const draft = await testDb.draft(); const input = { db: testDb.db, env, stripe: t.stripe, transactionId: draft.id };
+    await showTerminalBreakdown(input); if (preDip) t.presentCard();
+    expect((await cancelTerminalPayment(input)).paymentStatus).toBe("CANCELED");
+    expect(await statusFor(draft.id)).toBe("CANCELED"); expect(await locks()).toHaveLength(0);
+    expect(t.stripe.cancelReaderAction).toHaveBeenCalledOnce(); expect(t.reader().action).toBeNull();
+    expect(t.stripe.createPaymentIntent).not.toHaveBeenCalled(); expect(t.stripe.processPaymentIntent).not.toHaveBeenCalled();
+    expect((await processTerminalPayment(input)).paymentStatus).toBe("CANCELED");
+    expect(await testDb.db.select().from(emailDeliveries)).toHaveLength(0);
+  });
+
+  it("refuses Process Payment before a trusted breakdown is acknowledged", async () => {
+    const t = terminal(); const draft = await testDb.draft();
+    await expect(processTerminalPayment({ db: testDb.db, env, stripe: t.stripe, transactionId: draft.id })).rejects.toThrow(/Show Breakdown/);
+    expect(t.stripe.createPaymentIntent).not.toHaveBeenCalled(); expect(t.stripe.setReaderDisplay).not.toHaveBeenCalled();
+  });
+
+  it.each(["before-create", "after-create"])("refuses a displayed total mismatch %s without processing or resetting the Reader", async timing => {
+    const t = terminal(); const draft = await testDb.draft(); const input = { db: testDb.db, env, stripe: t.stripe, transactionId: draft.id };
+    await showTerminalBreakdown(input);
+    const corrupt = () => { t.reader().action!.set_reader_display!.cart!.total! += 1; };
+    if (timing === "before-create") corrupt();
+    else {
+      const create = t.stripe.createPaymentIntent.getMockImplementation()!;
+      t.stripe.createPaymentIntent.mockImplementation(async request => { const intent = await create(request); corrupt(); return intent; });
+    }
+    await expect(processTerminalPayment(input)).rejects.toThrow();
+    expect(t.stripe.createPaymentIntent).toHaveBeenCalledTimes(timing === "before-create" ? 0 : 1);
+    expect(t.stripe.processPaymentIntent).not.toHaveBeenCalled(); expect(t.stripe.setReaderDisplay).toHaveBeenCalledOnce();
+    expect(t.stripe.cancelReaderAction).not.toHaveBeenCalled(); expect(await locks()).toHaveLength(1);
+  });
+
+  it("a Cancel that wins the pre-payment claim prevents a concurrent Process Payment from creating an intent", async () => {
+    const t = terminal(); const draft = await testDb.draft(); const input = { db: testDb.db, env, stripe: t.stripe, transactionId: draft.id };
+    await showTerminalBreakdown(input); t.presentCard();
+    const captured = deferred(); const release = deferred(); const oldReader = structuredClone(t.reader());
+    t.stripe.retrieveReader.mockImplementationOnce(async () => { captured.resolve(); await release.promise; return oldReader; });
+    const pending = processTerminalPayment(input); await captured.promise;
+    expect((await cancelTerminalPayment(input)).paymentStatus).toBe("CANCELED");
+    release.resolve(); expect((await pending).paymentStatus).toBe("CANCELED");
+    expect(t.stripe.createPaymentIntent).not.toHaveBeenCalled(); expect(t.stripe.processPaymentIntent).not.toHaveBeenCalled();
+    expect(await locks()).toHaveLength(0); expect(t.reader().action).toBeNull();
+  });
+
+  it.each(["process", "cancel"])("an acknowledged successful display permits %s without mistaking display success for payment success", async next => {
+    const t = terminal(); const draft = await testDb.draft(); const input = { db: testDb.db, env, stripe: t.stripe, transactionId: draft.id };
+    const display = t.stripe.setReaderDisplay.getMockImplementation()!;
+    t.stripe.setReaderDisplay.mockImplementation(async request => { await display(request); t.reader().action!.status = "succeeded"; return structuredClone(t.reader()); });
+    expect((await showTerminalBreakdown(input)).breakdownReady).toBe(true);
+    t.presentCard();
+    if (next === "process") {
+      await processTerminalPayment(input); await reconcileTerminalPayment(input);
+      expect(await statusFor(draft.id)).toBe("PAID");
+    } else {
+      expect((await cancelTerminalPayment(input)).paymentStatus).toBe("CANCELED");
+      expect(t.stripe.createPaymentIntent).not.toHaveBeenCalled();
+    }
+    expect(await locks()).toHaveLength(0);
+  });
+
 });

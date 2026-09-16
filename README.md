@@ -4,7 +4,7 @@ BrickellHouse Payments is the standalone employee payment website for the physic
 
 ## Production safety boundary
 
-Deployment and page loads never initiate a payment. A live card charge begins only when an authenticated employee manually presses `Charge $XX.XX`.
+Deployment and page loads never initiate a payment. A live card charge begins only when an authenticated employee manually presses `Process Payment` after `Show Breakdown`. Displaying the breakdown alone never initiates a charge.
 
 - The Worker accepts only the approved live restricted Stripe key format and rejects test-mode objects.
 - Reader and Location IDs are server configuration; the browser cannot choose them.
@@ -84,9 +84,13 @@ The Stripe webhook remains `/api/webhooks/stripe` with the existing live event s
 
 ### Setup and cancellation recovery
 
-One Charge request owns setup through persisted stage claims. Polling only reads pre-card setup; it cannot rewrite an older `READER_RESERVED` snapshot over a committed PaymentIntent or Reader operation. Late responses preserve PROCESSING, PAID and canceled states. A submitted Reader operation is never repeated simply because its response or the Reader action disappeared.
+The employee flow is **Show Breakdown -> Process Payment -> success**. Show Breakdown sends the trusted itemized cart with `set_reader_display` and persists a `BREAKDOWN_READY` stage only after Stripe acknowledges the matching display. It creates no PaymentIntent. The UI then says “Resident may review the breakdown and present their card.” Process Payment is immediately available without a card-presented signal or employee confirmation.
 
-After two minutes without setup progress, the employee sees recovery guidance and can select Cancel. Cancellation independently checks the PaymentIntent, configured Reader, durable observations and reservation. It cancels a verified empty PaymentIntent before clearing its matching Reader action, then atomically closes the attempt and releases its reservation. Unknown intent-creation outcomes remain blocked; elapsed time is not evidence of nonpayment. Browser payment requests time out after 30 seconds without erasing the active transaction.
+This explicitly follows [Stripe Terminal pre-dip behavior](https://docs.stripe.com/terminal/features/display) for the US S710. A card may be presented before or after Process Payment; Stripe handles a pre-presented card internally, without an app event or a second collection call. Process Payment verifies the displayed total against the independently reconstructed trusted total and creates/resumes one PaymentIntent with that exact amount. It submits at most one Reader process command per attempt. Card presentation timing never creates another PaymentIntent or triggers a replay. Existing pricing, fee, GL, minimum, strict success reconciliation, durable observations and idempotent receipt delivery remain enforced.
+
+The transaction's trusted cart is frozen once shown. Repeated Show Breakdown and polling preserve it; a matching trusted Stripe display update does not reset the logical attempt. The application does not clear, replace or automatically expire a breakdown during review, including after the reservation TTL. Only explicit Cancel can discard the cart and any invisible pre-dip. Before processing, Cancel verifies that intent creation has not begun, clears only the owned cart and atomically abandons the transaction/releases its reservation. After processing begins, the existing strict Stripe/Reader/observation checks apply; unknown authorization or intent-creation outcomes remain protected.
+
+Persisted stage claims fence setup, processing and Cancel against each other. Polling cannot overwrite newer attempt state with stale `READER_RESERVED`, and delayed responses preserve PROCESSING, PAID and canceled states. Browser requests time out after 30 seconds without erasing the active transaction. A stalled setup/processing request shows recovery guidance after two minutes; a successfully displayed breakdown has no review timeout.
 
 The Admin-only GET `/api/admin/diagnostics/terminal-incident` is retained for non-charging production verification of POS-000026 and the configured S710. It uses read-only SQL and Stripe GETs and returns only allowlisted status fields and counts, with caching disabled. It never returns secrets, raw Stripe objects or card details. The one-time `/recover` form and POST were removed after successful recovery.
 
