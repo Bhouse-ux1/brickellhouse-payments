@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { ArrowRight, CreditCard, LoaderCircle, Minus, Plus, ShieldCheck } from "lucide-react";
-import { MAX_QUANTITY, parseQuantityInput } from "../domain/transactions/validation";
+import { QuantityInput } from "./quantity-input";
 
 export function Brand({ className = "brand" }: { className?: string }) {
   return <div className={className}><span className="brandMonogram" aria-hidden="true">BH</span><div>BrickellHouse<small>Management</small></div></div>;
@@ -11,14 +11,14 @@ export function PageHeader({ title, description, children }: { title: string; de
 }
 
 export function AccessLayout({ children }: { children: ReactNode }) {
-  return <div className="signInPage"><header className="accessHeader"><Brand/><span>Employee access</span></header><main className="accessFormArea">{children}<p className="accessFooter">For authorized BrickellHouse employees</p></main></div>;
+  return <div className="signInPage"><header className="accessHeader"><Brand/></header><main className="accessFormArea">{children}</main></div>;
 }
 
 // This quantity stages an Add interaction only; the existing cart handler still
 // enforces the trusted product's quantity rules and calculates every total.
-export function ProductCard({ name, category, price, icon, selectedQuantity, quantityAllowed, disabled, onAdd }: {
+export function ProductCard({ name, category, price, icon, selectedQuantity, quantityAllowed, maximumQuantity, disabled, onAdd }: {
   name: string; category: string; price: string; icon: ReactNode; selectedQuantity: number;
-  quantityAllowed: boolean; disabled: boolean; onAdd: (quantity: number) => void;
+  quantityAllowed: boolean; maximumQuantity: number; disabled: boolean; onAdd: (quantity: number) => void;
 }) {
   const [quantity, setQuantity] = useState(1);
   return <article className={`product${selectedQuantity ? " selected" : ""}`} data-disabled={disabled || undefined}>
@@ -26,8 +26,8 @@ export function ProductCard({ name, category, price, icon, selectedQuantity, qua
     <div className="productCopy"><h3>{name}</h3><p>{category}</p><strong>{price}</strong></div>
     <div className="productActions"><span className="qty" role="group" aria-label={`Quantity to add for ${name}`}>
       <button aria-label="Decrease quantity to add" disabled={disabled || !quantityAllowed || quantity <= 1} onClick={() => setQuantity(current => Math.max(1, current - 1))}><Minus size={13}/></button>
-      <input aria-label={`Quantity to add for ${name}`} type="number" inputMode="numeric" min={1} max={MAX_QUANTITY} step={1} value={quantity} disabled={disabled || !quantityAllowed} onFocus={event => event.currentTarget.select()} onChange={event => { const next = parseQuantityInput(event.target.value); if (next) setQuantity(next); }}/>
-      <button aria-label="Increase quantity to add" disabled={disabled || !quantityAllowed || quantity >= MAX_QUANTITY} onClick={() => setQuantity(current => Math.min(MAX_QUANTITY, current + 1))}><Plus size={13}/></button>
+      <QuantityInput label={`Quantity to add for ${name}`} value={quantity} maximum={maximumQuantity} disabled={disabled || !quantityAllowed} onValueChange={setQuantity}/>
+      <button aria-label="Increase quantity to add" disabled={disabled || !quantityAllowed || quantity >= maximumQuantity} onClick={() => setQuantity(current => Math.min(maximumQuantity, current + 1))}><Plus size={13}/></button>
     </span><button className="addProduct" disabled={disabled} aria-label={`Add ${name}`} onClick={() => onAdd(quantity)}>Add</button></div>
   </article>;
 }

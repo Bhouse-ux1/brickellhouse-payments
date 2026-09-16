@@ -2,7 +2,7 @@ import { calculateProcessingFee } from "@/domain/payments/processing-fee";
 import { meetsMinimumPayment, MINIMUM_PAYMENT_MESSAGE } from "@/domain/payments/minimum-payment";
 import { trustedGlCodeForCustomCharge, trustedGlCodeForProduct } from "@/domain/accounting/gl-rules";
 import type { TrustedProduct } from "@/domain/products/catalog";
-import { checkoutRequestSchema } from "./validation";
+import { checkoutRequestSchema, maximumQuantityForProduct } from "./validation";
 
 export class FinancialValidationError extends Error {
   constructor(public readonly code: string, message: string) { super(message); }
@@ -36,7 +36,7 @@ export function reconstructTrustedTransaction(
     if (!product.quantityAllowed && quantity !== 1) {
       throw new FinancialValidationError("QUANTITY_NOT_ALLOWED", `${product.displayName} can only be added once.`);
     }
-    if (quantity > 99) throw new FinancialValidationError("QUANTITY_TOO_LARGE", "Quantity exceeds the allowed maximum.");
+    if (quantity > maximumQuantityForProduct(product.id)) throw new FinancialValidationError("QUANTITY_TOO_LARGE", "Quantity exceeds the allowed maximum.");
     lines.push({
       productId: product.id,
       productNameSnapshot: product.displayName,

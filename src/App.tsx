@@ -8,8 +8,9 @@ import { calculateProcessingFee } from "@/domain/payments/processing-fee";
 import { meetsMinimumPayment, MINIMUM_PAYMENT_MESSAGE } from "@/domain/payments/minimum-payment";
 import { cancellationCompleted, nextEmployeePaymentStatus, paymentActivationUi, paymentPhaseLabel } from "@/domain/payments/ui-state";
 import { productCatalog, type TrustedProduct } from "@/domain/products/catalog";
-import { MAX_QUANTITY, parseMoneyInput, parseQuantityInput } from "@/domain/transactions/validation";
+import { maximumQuantityForProduct, parseMoneyInput, parseQuantityInput } from "@/domain/transactions/validation";
 import { AccessLayout, Brand, ClearedPaymentAnnouncement, PageHeader, PaymentAction, ProductCard } from "./ui/interface";
+import { QuantityInput } from "./ui/quantity-input";
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 type EmployeeRole = "ADMIN" | "STAFF";
@@ -43,7 +44,7 @@ function Shell({ children, employeeName, employeeRole, onSignOut }: { children: 
         {employeeRole === "ADMIN" && <NavLink to="/accounting" title="Accounting"><Landmark size={17}/><span>Accounting</span></NavLink>}
         {employeeRole === "ADMIN" && <NavLink to="/admin" title="Staff Access"><UserCog size={17}/><span>Staff Access</span></NavLink>}
       </nav>
-      <div className="accountArea"><span className="terminalIndicator" title="Front desk S710 · Live payments"><CreditCard size={17} aria-hidden="true"/><span>S710<small>Live payments</small></span></span><div className="employee" title={`${employeeName} · ${employeeRole === "ADMIN" ? "Administrator" : "Staff"}`}><span>{initials}</span><div>{employeeName}<small>{employeeRole === "ADMIN" ? "Administrator" : "Staff"}</small></div><button aria-label="Sign out" title="Sign out" onClick={onSignOut}><LogOut size={17}/></button></div></div>
+      <div className="accountArea"><div className="employee" title={`${employeeName} · ${employeeRole === "ADMIN" ? "Administrator" : "Staff"}`}><span>{initials}</span><div>{employeeName}<small>{employeeRole === "ADMIN" ? "Administrator" : "Staff"}</small></div><button aria-label="Sign out" title="Sign out" onClick={onSignOut}><LogOut size={17}/></button></div></div>
     </header>
     <main className="page" id="main-content" tabIndex={-1}>{children}</main>
   </div>;
@@ -183,7 +184,7 @@ function NewTransaction() {
     if (activeTransactionId) return;
     setNotice("");
     setQuantities((current) => {
-      const next = product.quantityAllowed ? Math.min(MAX_QUANTITY, Math.max(0, (current[product.id] ?? 0) + delta)) : delta > 0 ? 1 : 0;
+      const next = product.quantityAllowed ? Math.min(maximumQuantityForProduct(product.id), Math.max(0, (current[product.id] ?? 0) + delta)) : delta > 0 ? 1 : 0;
       const copy = { ...current };
       if (next) copy[product.id] = next; else delete copy[product.id];
       return copy;
@@ -192,7 +193,7 @@ function NewTransaction() {
 
   function setQuantity(product: CatalogProduct, value: string) {
     if (activeTransactionId || !product.quantityAllowed) return;
-    const next = parseQuantityInput(value);
+    const next = parseQuantityInput(value, maximumQuantityForProduct(product.id));
     if (!next) return;
     setNotice("");
     setQuantities((current) => ({ ...current, [product.id]: next }));
@@ -255,7 +256,7 @@ function NewTransaction() {
   }
 
   return <>
-    <PageHeader title="New Transaction" description="Charge resident items and services."><span className="internalBadge"><ShieldCheck size={16} aria-hidden="true"/>Employee use only</span></PageHeader>
+    <PageHeader title="New Transaction" description="Charge resident items and services."/>
     <div className="workspace">
       <section className="flow" aria-label="Resident and services">
         <div className="residentStrip">
@@ -266,7 +267,7 @@ function NewTransaction() {
         <div className="catalogHead"><h2>Products &amp; Services</h2><label className="search"><Search size={18} aria-hidden="true"/><input aria-label="Search products" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search products"/></label><div className="filters" aria-label="Service categories">{["All", "Access", "Keys", "Maintenance", "Printing", "Valet"].map((c) => <button key={c} aria-pressed={category === c} className={category === c ? "active" : ""} onClick={() => setCategory(c)}>{c}</button>)}</div></div>
         {catalogState === "loading" && <div className="notice" role="status">Loading the trusted product catalog…</div>}
         {catalogState === "error" && <div className="notice" role="alert">The product catalog is temporarily unavailable.</div>}
-        <div className="products">{products.map((product) => { const Icon = icons[product.id] ?? Wrench; return <ProductCard key={product.id} name={product.displayName} category={product.category} price={money.format(product.priceCents / 100)} icon={<Icon size={48} strokeWidth={1.2}/>} selectedQuantity={quantities[product.id] ?? 0} quantityAllowed={product.quantityAllowed} disabled={Boolean(activeTransactionId)} onAdd={quantity => change(product, quantity)}/>; })}</div>
+        <div className="products">{products.map((product) => { const Icon = icons[product.id] ?? Wrench; return <ProductCard key={product.id} name={product.displayName} category={product.category} price={money.format(product.priceCents / 100)} icon={<Icon size={48} strokeWidth={1.2}/>} selectedQuantity={quantities[product.id] ?? 0} quantityAllowed={product.quantityAllowed} maximumQuantity={maximumQuantityForProduct(product.id)} disabled={Boolean(activeTransactionId)} onAdd={quantity => change(product, quantity)}/>; })}</div>
         {catalogState === "ready" && products.length === 0 && <div className="serviceEmpty"><Search size={24} aria-hidden="true"/><h3>No services found</h3><p>Try another search or category.</p></div>}
         <div className="custom">
           <h3>Custom Charge</h3>
@@ -281,7 +282,7 @@ function NewTransaction() {
         {completedPayment && <div className="paymentSuccess" role="status"><ShieldCheck size={22}/><div><strong>Payment successful</strong><span>{money.format(completedPayment.totalCents / 100)}{completedPayment.cardBrand && completedPayment.cardLastFour ? ` · ${completedPayment.cardBrand} •••• ${completedPayment.cardLastFour}` : ""}</span></div><button onClick={() => { setCompletedPayment(null); setNotice(""); setPaymentStatus("DRAFT"); }}>New Transaction</button></div>}
         <div className={selected.length || custom ? "lines" : "lines empty"}>
           {!selected.length && !custom && <div className="emptyState"><ReceiptText size={28} strokeWidth={1.3} aria-hidden="true"/><strong>No items added</strong><span>Your selected charges will appear here.</span></div>}
-          {selected.map((p) => <div className="line" key={p.id}><div className="lineName"><strong>{p.displayName}</strong><small className="unitPrice">{money.format(p.priceCents / 100)} each</small></div><span className="qty"><button aria-label={`Decrease ${p.displayName} quantity`} disabled={Boolean(activeTransactionId)} onClick={() => change(p, -1)}><Minus size={12}/></button><input aria-label={`${p.displayName} quantity`} disabled={Boolean(activeTransactionId) || !p.quantityAllowed} inputMode="numeric" min={1} max={MAX_QUANTITY} step={1} type="number" value={quantities[p.id]} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setQuantity(p, event.target.value)}/><button aria-label={`Increase ${p.displayName} quantity`} disabled={Boolean(activeTransactionId) || !p.quantityAllowed || quantities[p.id] >= MAX_QUANTITY} onClick={() => change(p, 1)}><Plus size={12}/></button></span><b key={quantities[p.id]}>{money.format(p.priceCents * quantities[p.id] / 100)}</b><button className="remove" aria-label={`Remove ${p.displayName}`} title="Remove" disabled={Boolean(activeTransactionId)} onClick={() => change(p, -MAX_QUANTITY)}><X size={15}/></button></div>)}
+          {selected.map((p) => <div className="line" key={p.id}><div className="lineName"><strong>{p.displayName}</strong><small className="unitPrice">{money.format(p.priceCents / 100)} each</small></div><span className="qty"><button aria-label={`Decrease ${p.displayName} quantity`} disabled={Boolean(activeTransactionId)} onClick={() => change(p, -1)}><Minus size={12}/></button><QuantityInput label={`${p.displayName} quantity`} disabled={Boolean(activeTransactionId) || !p.quantityAllowed} maximum={maximumQuantityForProduct(p.id)} value={quantities[p.id]} onValueChange={value => setQuantity(p, String(value))}/><button aria-label={`Increase ${p.displayName} quantity`} disabled={Boolean(activeTransactionId) || !p.quantityAllowed || quantities[p.id] >= maximumQuantityForProduct(p.id)} onClick={() => change(p, 1)}><Plus size={12}/></button></span><b key={quantities[p.id]}>{money.format(p.priceCents * quantities[p.id] / 100)}</b><button className="remove" aria-label={`Remove ${p.displayName}`} title="Remove" disabled={Boolean(activeTransactionId)} onClick={() => change(p, -maximumQuantityForProduct(p.id))}><X size={15}/></button></div>)}
           {custom && <div className="line customLine"><div className="lineName"><strong>{custom.description}</strong><small>Custom charge</small></div><b>{money.format(custom.amountCents / 100)}</b><button className="remove" aria-label="Remove custom charge" title="Remove" disabled={Boolean(activeTransactionId)} onClick={() => setCustom(null)}><X size={15}/></button></div>}
         </div>
         <div className="totals"><div><span>Subtotal</span><b>{money.format(subtotal / 100)}</b></div><div><span>Processing fee</span><b>{money.format(fee / 100)}</b></div><div className="grand"><span>Total<small>USD</small></span><b key={total}>{money.format(total / 100)}</b></div></div>
@@ -434,7 +435,7 @@ function SignInPage() {
     });
     setWorking(false); setMessage("If this approved employee account exists, a password reset link has been sent.");
   }
-  return <AccessLayout><form className="signInPanel" onSubmit={(event) => { event.preventDefault(); void (forgot ? requestReset() : signIn()); }}><span className="signInKicker">Internal payment management</span><h1>{forgot ? "Reset password" : "Sign in"}</h1><p>{forgot ? "Enter your approved employee email to receive a secure reset link." : "Use your approved BrickellHouse employee account."}</p><label className="accessPassword"><span>Email</span><input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} autoFocus /></label>{!forgot && <label className="accessPassword"><span>Password</span><input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>}<button type="submit" disabled={!email || (!forgot && !password) || working}>{working ? "Please wait…" : forgot ? "Send reset link" : "Sign In"}</button><button className="forgotButton" type="button" onClick={() => { setForgot(!forgot); setMessage(""); }}>{forgot ? "Back to Sign In" : "Forgot Password"}</button>{message && <div role="status">{message}</div>}</form></AccessLayout>;
+  return <AccessLayout><form className="signInPanel" onSubmit={(event) => { event.preventDefault(); void (forgot ? requestReset() : signIn()); }}><h1>{forgot ? "Reset password" : "Sign in"}</h1><p>{forgot ? "Enter your approved employee email to receive a secure reset link." : "Use your approved BrickellHouse employee account."}</p><label className="accessPassword"><span>Email</span><input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} autoFocus /></label>{!forgot && <label className="accessPassword"><span>Password</span><input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>}<button type="submit" disabled={!email || (!forgot && !password) || working}>{working ? "Please wait…" : forgot ? "Send reset link" : "Sign In"}</button><button className="forgotButton" type="button" onClick={() => { setForgot(!forgot); setMessage(""); }}>{forgot ? "Back to Sign In" : "Forgot Password"}</button>{message && <div role="status">{message}</div>}</form></AccessLayout>;
 }
 
 function ResetPasswordPage() {
@@ -442,7 +443,7 @@ function ResetPasswordPage() {
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState(token ? "" : "This password reset link is invalid or expired.");
   const [working, setWorking] = useState(false);
-  return <AccessLayout><form className="signInPanel" onSubmit={async (event) => { event.preventDefault(); if (!token) return; setWorking(true); const response = await fetch("/api/auth/reset-password", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ newPassword: password, token }) }); setWorking(false); setMessage(response.ok ? "Password set. You can now sign in." : "This password reset link is invalid or expired."); }}><span className="signInKicker">Secure employee access</span><h1>Set password</h1><p>Choose at least 12 characters. All existing sessions are revoked when a password is reset.</p><label className="accessPassword"><span>New password</span><input type="password" autoComplete="new-password" minLength={12} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} autoFocus /></label><button type="submit" disabled={!token || password.length < 12 || working}>{working ? "Saving…" : "Set password"}</button><button className="forgotButton" type="button" onClick={() => window.location.assign("/")}>Back to Sign In</button>{message && <div role="status">{message}</div>}</form></AccessLayout>;
+  return <AccessLayout><form className="signInPanel" onSubmit={async (event) => { event.preventDefault(); if (!token) return; setWorking(true); const response = await fetch("/api/auth/reset-password", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ newPassword: password, token }) }); setWorking(false); setMessage(response.ok ? "Password set. You can now sign in." : "This password reset link is invalid or expired."); }}><h1>Set password</h1><p>Choose at least 12 characters. All existing sessions are revoked when a password is reset.</p><label className="accessPassword"><span>New password</span><input type="password" autoComplete="new-password" minLength={12} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} autoFocus /></label><button type="submit" disabled={!token || password.length < 12 || working}>{working ? "Saving…" : "Set password"}</button><button className="forgotButton" type="button" onClick={() => window.location.assign("/")}>Back to Sign In</button>{message && <div role="status">{message}</div>}</form></AccessLayout>;
 }
 
 function Application({ employeeName, employeeRole, onSignOut }: { employeeName: string; employeeRole: EmployeeRole; onSignOut: () => void }) {

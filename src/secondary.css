@@ -68,10 +68,8 @@
 /* Employee access shares the same light horizontal brand header. */
 .signInPage { min-height: 100vh; background: var(--canvas); }
 .accessHeader { min-height: 74px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 14px var(--page-gutter); border-bottom: 1px solid var(--line); background: #fbfaf8; }
-.accessHeader>span { color: var(--muted); font-size: 14px; }
 .accessFormArea { min-height: calc(100vh - 74px); padding: 64px 24px 32px; display: flex; flex-direction: column; justify-content: center; align-items: center; }
 .signInPanel { width: min(450px,100%); margin: auto 0; padding: 32px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); }
-.signInKicker { display: block; color: var(--muted); font-size: 14px; margin-bottom: 10px; }
 .signInPanel h1 { margin: 0 0 12px; font: 400 36px/1.2 var(--display); color: var(--ink); letter-spacing: -.7px; }
 .signInPanel>p { margin: 0 0 24px; color: var(--muted); font-size: 15px; line-height: 1.7; }
 .accessPassword { display: block; margin-bottom: 18px; } .accessPassword span { display: block; margin-bottom: 7px; font-size: 14px; color: var(--ink); }
@@ -82,7 +80,6 @@
 .signInPanel>.forgotButton { margin-top: 10px; border-color: transparent; background: transparent; color: var(--forest); font-size: 14px; }
 .signInPanel>.forgotButton:hover { background: var(--warm); }
 .signInPanel>div[role="status"] { margin-top: 18px; padding: 14px; color: #6e5a3b; background: #f4f0e8; border: 1px solid #e2dbce; border-radius: var(--radius-sm); font-size: 14px; line-height: 1.6; animation: enterSoft var(--duration) var(--ease); }
-.accessFooter { margin: 28px 0 0; color: var(--muted); font-size: 13px; text-align: center; }
 .sessionLoading { min-height: 100vh; display: grid; place-items: center; padding: 30px; color: var(--ink); font-size: 16px; background: var(--canvas); }
 
 @media (max-width: 1190px) { .recordHead, .recordRow { padding-inline: 20px; gap: var(--space-3); } }
@@ -103,7 +100,7 @@
   .adminUser>div { grid-column: 1/-1; } .adminUser>select { grid-column: 1; } .adminUser>button:last-child:not(:nth-child(3)) { grid-column: 2; }
 }
 @media (max-width: 600px) {
-  .accessHeader>span { display: none; } .accessFormArea { padding: 30px 18px 24px; } .signInPanel { padding: 24px; }
+  .accessFormArea { padding: 30px 18px 24px; } .signInPanel { padding: 24px; }
   .records, .accountingPage, .adminPage { padding: 0 var(--page-gutter) var(--space-6); } .recordRow { grid-template-columns: 1fr 1fr; padding: 22px; gap: 20px; }
   .recordTools { gap: 13px; } .recordTools>label:not(.recordSearch) { width: calc(50% - 7px); } .recordTools>label>input { max-width: 100%; }
   .outlineAction { padding: 9px; font-size: var(--text-xs); gap: 5px; } .adminCreate>div:not(.historyNote) { grid-template-columns: 1fr; gap: 17px; }

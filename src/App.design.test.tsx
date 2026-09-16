@@ -20,6 +20,41 @@ function mockCatalog() {
 }
 
 describe("redesigned payment controls", () => {
+  it.each(["Black & White Printing", "Color Printing"])("supports printing boundaries in both product and cart controls: %s", async name => {
+    const fetcher = mockCatalog();
+    const add = await screen.findByRole("button", { name: `Add ${name}` });
+    const input = screen.getByRole("spinbutton", { name: `Quantity to add for ${name}` }) as HTMLInputElement;
+    expect(input.max).toBe("1000");
+    const price = productCatalog.find(p => p.displayName === name)!.priceCents;
+    for (const quantity of [1, 99, 100, 999, 1000]) {
+      fireEvent.focus(input); fireEvent.change(input, { target: { value: "" } }); expect(input.value).toBe("");
+      fireEvent.change(input, { target: { value: String(quantity) } }); fireEvent.blur(input); fireEvent.click(add);
+      const cart = screen.getByLabelText(`${name} quantity`) as HTMLInputElement;
+      expect(cart.max).toBe("1000"); expect(cart.value).toBe(String(quantity));
+      fireEvent.focus(cart); fireEvent.change(cart, { target: { value: "" } }); expect(cart.value).toBe("");
+      expect(document.querySelector(".line>b")?.textContent).toBe(new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(price * quantity / 100));
+      fireEvent.keyDown(cart, { key: "Enter" }); expect(cart.value).toBe(String(quantity));
+      fireEvent.change(cart, { target: { value: "1001" } }); fireEvent.blur(cart); expect(cart.value).toBe(String(quantity));
+      if (quantity === 1000) {
+        expect((screen.getByLabelText(`Increase ${name} quantity`) as HTMLButtonElement).disabled).toBe(true);
+        fireEvent.click(screen.getByLabelText(`Decrease ${name} quantity`)); expect(cart.value).toBe("999");
+        fireEvent.click(screen.getByLabelText(`Increase ${name} quantity`)); expect(cart.value).toBe("1000");
+      }
+      fireEvent.click(screen.getByRole("button", { name: `Remove ${name}` }));
+      expect(screen.queryByLabelText(`${name} quantity`)).toBeNull();
+    }
+    fireEvent.change(input, { target: { value: "1001" } }); fireEvent.blur(input); expect(input.value).toBe("1000");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps every other product at 99 and removes unnecessary interface labels", async () => {
+    mockCatalog(); await screen.findByRole("button", { name: "Add Parking Fob" });
+    for (const product of productCatalog.filter(p => p.category !== "Printing")) {
+      expect((screen.getByRole("spinbutton", { name: `Quantity to add for ${product.displayName}` }) as HTMLInputElement).max).toBe("99");
+    }
+    expect(screen.queryByText(/employee use only|internal use only|live payments/i)).toBeNull();
+  });
+
   it("keeps the untouched and emptied cart neutral, with no minimum sweep", async () => {
     const fetcher = mockCatalog();
     const add = await screen.findByRole("button", { name: "Add Black & White Printing" });
@@ -36,16 +71,16 @@ describe("redesigned payment controls", () => {
 
   it("stages typed product quantities until Add and preserves the cart's 1–99 limit", async () => {
     const fetcher = mockCatalog();
-    const add = await screen.findByRole("button", { name: "Add Black & White Printing" });
-    const quantity = screen.getByRole("spinbutton", { name: "Quantity to add for Black & White Printing" }) as HTMLInputElement;
+    const add = await screen.findByRole("button", { name: "Add Parking Fob" });
+    const quantity = screen.getByRole("spinbutton", { name: "Quantity to add for Parking Fob" }) as HTMLInputElement;
     fireEvent.change(quantity, { target: { value: "9" } });
-    expect(screen.queryByLabelText("Black & White Printing quantity")).toBeNull();
+    expect(screen.queryByLabelText("Parking Fob quantity")).toBeNull();
     fireEvent.click(add);
-    expect((screen.getByLabelText("Black & White Printing quantity") as HTMLInputElement).value).toBe("9");
-    fireEvent.change(quantity, { target: { value: "0" } }); expect(quantity.value).toBe("9");
-    fireEvent.change(quantity, { target: { value: "100" } }); expect(quantity.value).toBe("9");
+    expect((screen.getByLabelText("Parking Fob quantity") as HTMLInputElement).value).toBe("9");
+    fireEvent.change(quantity, { target: { value: "0" } }); fireEvent.blur(quantity); expect(quantity.value).toBe("9");
+    fireEvent.change(quantity, { target: { value: "100" } }); fireEvent.blur(quantity); expect(quantity.value).toBe("9");
     fireEvent.change(quantity, { target: { value: "99" } }); fireEvent.click(add);
-    expect((screen.getByLabelText("Black & White Printing quantity") as HTMLInputElement).value).toBe("99");
+    expect((screen.getByLabelText("Parking Fob quantity") as HTMLInputElement).value).toBe("99");
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
