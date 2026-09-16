@@ -6,7 +6,7 @@ import { createStripeTerminalClient, validateLivePaymentIntent, validateLiveRead
 import type { StripePaymentIntent, StripeReader } from "./stripe-client";
 import type { WorkerBindings } from "@worker/types";
 
-// Temporary incident scope: callers cannot select another transaction or Reader.
+// Retained Admin diagnostic scope: callers cannot select another transaction or Reader.
 const INCIDENT_TRANSACTION_ID = "3971ba79-1704-4e95-a189-2857847a3075";
 
 const allowed = (value: string | undefined, values: readonly string[]) => value && values.includes(value) ? value : "unknown";
@@ -26,6 +26,7 @@ export function safeDiagnosticResult(input: {
   hasPaidAt: boolean;
   hasNonfailedObservation: boolean;
   databaseChanged: boolean;
+  readerLockCount?: number;
 }) {
   const { reader, intent } = input;
   const reference = reader.action?.process_payment_intent?.payment_intent;
@@ -44,7 +45,10 @@ export function safeDiagnosticResult(input: {
   if (!input.databaseChanged && input.readerMatches && input.mappingMatches && input.identityAndAmountMatch) {
     if (intent?.status === "succeeded" || input.hasPaidAt || input.transactionStatus === "PAID") decision = "SUCCESS_REQUIRES_EXISTING_STRICT_FINALIZATION";
     else if (intent?.status === "processing" || (readerActive && readerPaymentMatches)) decision = "PAYMENT_ACTIVE";
-    else if (intent?.status === "canceled" && idle && !input.hasRecordedCharge && !input.hasNonfailedObservation && !readerSucceeded) decision = "STRIPE_CANCELED_REQUIRES_DATABASE_RECONCILIATION";
+    else if (intent?.status === "canceled" && idle && !input.hasRecordedCharge && !input.hasNonfailedObservation && !readerSucceeded) {
+      decision = input.transactionStatus === "CANCELED" && input.attemptStatus === "CANCELED" && input.readerLockCount === 0 && reader.status === "online" && !reader.action
+        ? "CANCELED_READER_READY" : "STRIPE_CANCELED_REQUIRES_DATABASE_RECONCILIATION";
+    }
     else if (preCard) decision = "PRE_CARD_CANCEL_CANDIDATE_RECHECK_BEFORE_ANY_ACTION";
   }
   return {
@@ -136,7 +140,7 @@ export async function readTerminalDiagnostic(db: Database, env: WorkerBindings) 
       ...safeDiagnosticResult({ reader, intent, transactionStatus: transaction.paymentStatus, attemptStatus: attempt.status,
         identityAndAmountMatch, readerMatches, cartMatches, mappingMatches, reservationOwned: reservation.lockPaymentAttemptId === attempt.id,
         hasRecordedOperation: Boolean(attempt.stripeReaderOperationId), hasRecordedCharge: Boolean(transaction.stripeChargeId), hasPaidAt: Boolean(transaction.paidAt),
-        hasNonfailedObservation: observations.some(o => o.status !== "failed"), databaseChanged: JSON.stringify(before) !== JSON.stringify(after) }),
+        hasNonfailedObservation: observations.some(o => o.status !== "failed"), readerLockCount: locks.length, databaseChanged: JSON.stringify(before) !== JSON.stringify(after) }),
     };
   }, { accessMode: "read only", isolationLevel: "read committed" });
 }

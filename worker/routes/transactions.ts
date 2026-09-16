@@ -9,6 +9,7 @@ import { createDraftTransaction } from "@/services/transactions/create-draft";
 import { requireEmployee } from "@worker/middleware/require-employee";
 import {
   cancelTerminalPayment, clearTerminalDisplay, reconcileTerminalPayment, startTerminalPayment, TerminalFlowError,
+  setupPaymentView,
 } from "@worker/services/terminal-payment";
 import type { WorkerEnvironment } from "@worker/types";
 import { deliverPaidTransactionNotifications, deliverPaidTransactionReceipt, queueReceiptResend } from "@worker/services/receipt-delivery";
@@ -67,6 +68,7 @@ transactionRoutes.get("/:id", async (c) => {
     status: paymentAttempts.status,
     lastErrorCode: paymentAttempts.lastErrorCode,
     stripePaymentIntentId: paymentAttempts.stripePaymentIntentId,
+    updatedAt: paymentAttempts.updatedAt,
   }).from(paymentAttempts).where(eq(paymentAttempts.transactionId, transaction.id))
     .orderBy(desc(paymentAttempts.attemptNumber)).limit(1);
   const [receipt] = await db.select({
@@ -74,11 +76,15 @@ transactionRoutes.get("/:id", async (c) => {
     sentAt: emailDeliveries.sentAt,
     attemptCount: emailDeliveries.attemptCount,
   }).from(emailDeliveries).where(and(eq(emailDeliveries.transactionId, transaction.id), eq(emailDeliveries.kind, "RESIDENT_RECEIPT"))).limit(1);
+  const setup = paymentAttempt && ["CREATED", "READER_RESERVED", "PAYMENT_INTENT_CREATED", "SENT_TO_READER"].includes(paymentAttempt.status) &&
+    ["DRAFT", "READY", "SENDING_TO_TERMINAL"].includes(transaction.paymentStatus)
+    ? setupPaymentView(transaction.id, paymentAttempt.updatedAt) : null;
   return c.json({
     transaction, items, receipt: receipt ?? null,
     payment: {
       status: transaction.paymentStatus,
-      displayStatus: employeePaymentStatus[transaction.paymentStatus],
+      displayStatus: setup?.displayStatus ?? employeePaymentStatus[transaction.paymentStatus],
+      setupRecoveryRequired: setup?.setupRecoveryRequired ?? false,
       readerDisplayPending: transaction.paymentStatus === "SENDING_TO_TERMINAL" &&
         paymentAttempt?.status === "READER_RESERVED" && !paymentAttempt.lastErrorCode,
       recoveryRequired: Boolean(paymentAttempt?.status === "READER_RESERVED" &&

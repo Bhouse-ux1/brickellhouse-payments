@@ -408,13 +408,13 @@ export async function processStripeEvent(input: {
     } else if (decision === "PROCESSING") {
       if (failureCode === "connection_error") {
         await input.db.update(paymentAttempts).set({ status: "PROCESSING", lastErrorCode: failureCode, lastErrorMessage: "Stripe state is being reconciled.", updatedAt: new Date() })
-          .where(and(eq(paymentAttempts.id, context.attempt.id), ne(paymentAttempts.status, "SUCCEEDED")));
+          .where(and(eq(paymentAttempts.id, context.attempt.id), inArray(paymentAttempts.status, ["READER_RESERVED", "PAYMENT_INTENT_CREATED", "SENT_TO_READER", "WAITING_FOR_CUSTOMER", "PROCESSING"]), or(isNull(paymentAttempts.lastErrorCode), ne(paymentAttempts.lastErrorCode, "CANCEL_STARTING"))));
       } else {
         await input.db.update(paymentAttempts).set({ status: "PROCESSING", updatedAt: new Date() })
-          .where(and(eq(paymentAttempts.id, context.attempt.id), ne(paymentAttempts.status, "SUCCEEDED")));
+          .where(and(eq(paymentAttempts.id, context.attempt.id), inArray(paymentAttempts.status, ["READER_RESERVED", "PAYMENT_INTENT_CREATED", "SENT_TO_READER", "WAITING_FOR_CUSTOMER", "PROCESSING"]), or(isNull(paymentAttempts.lastErrorCode), ne(paymentAttempts.lastErrorCode, "CANCEL_STARTING"))));
       }
       await input.db.update(transactions).set({ paymentStatus: "PROCESSING", updatedAt: new Date() })
-        .where(and(eq(transactions.id, context.transaction.id), ne(transactions.paymentStatus, "PAID")));
+        .where(and(eq(transactions.id, context.transaction.id), inArray(transactions.paymentStatus, ["DRAFT", "READY", "SENDING_TO_TERMINAL", "WAITING_FOR_CUSTOMER", "PROCESSING"])));
     } else {
       await (input.finalizeFailed ?? markPaymentFailed)({
         db: input.db,

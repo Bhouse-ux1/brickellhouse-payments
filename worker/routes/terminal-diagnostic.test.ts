@@ -34,6 +34,8 @@ describe("temporary Admin read-only diagnostic", () => {
     const { routes, read } = setup();
     expect((await routes.request("/terminal-incident", { method: "POST" })).status).toBe(404);
     expect((await routes.request("/terminal-incident/other")).status).toBe(404);
+    expect((await routes.request("/terminal-incident/recover")).status).toBe(404);
+    expect((await routes.request("/terminal-incident/recover", { method: "POST" })).status).toBe(404);
     expect(read).not.toHaveBeenCalled();
   });
   it("never returns raw provider error content", async () => {

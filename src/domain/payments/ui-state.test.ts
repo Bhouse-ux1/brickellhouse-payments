@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { paymentActivationUi, paymentPhaseLabel } from "./ui-state";
+import { cancellationCompleted, nextEmployeePaymentStatus, paymentActivationUi, paymentPhaseLabel } from "./ui-state";
 
 describe("employee Terminal payment state", () => {
+  it("rejects stale preparation/waiting responses after newer processing or terminal states", () => {
+    expect(nextEmployeePaymentStatus("PROCESSING", "WAITING_FOR_CUSTOMER")).toBe("PROCESSING");
+    expect(nextEmployeePaymentStatus("PAID", "SENDING_TO_TERMINAL")).toBe("PAID");
+    expect(nextEmployeePaymentStatus("CANCELED", "WAITING_FOR_CUSTOMER")).toBe("CANCELED");
+    expect(cancellationCompleted(true, "SENDING_TO_TERMINAL")).toBe(false);
+    expect(cancellationCompleted(false, "CANCELED")).toBe(false);
+    expect(cancellationCompleted(true, "CANCELED")).toBe(true);
+  });
   it("keeps the one-click flow active while the cart and reader are prepared", () => {
     const state = paymentActivationUi({
       hasActiveTransaction: true,

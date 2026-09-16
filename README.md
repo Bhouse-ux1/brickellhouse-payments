@@ -82,6 +82,16 @@ The Stripe webhook remains `/api/webhooks/stripe` with the existing live event s
 
 ## Local validation
 
+### Setup and cancellation recovery
+
+One Charge request owns setup through persisted stage claims. Polling only reads pre-card setup; it cannot rewrite an older `READER_RESERVED` snapshot over a committed PaymentIntent or Reader operation. Late responses preserve PROCESSING, PAID and canceled states. A submitted Reader operation is never repeated simply because its response or the Reader action disappeared.
+
+After two minutes without setup progress, the employee sees recovery guidance and can select Cancel. Cancellation independently checks the PaymentIntent, configured Reader, durable observations and reservation. It cancels a verified empty PaymentIntent before clearing its matching Reader action, then atomically closes the attempt and releases its reservation. Unknown intent-creation outcomes remain blocked; elapsed time is not evidence of nonpayment. Browser payment requests time out after 30 seconds without erasing the active transaction.
+
+The Admin-only GET `/api/admin/diagnostics/terminal-incident` is retained for non-charging production verification of POS-000026 and the configured S710. It uses read-only SQL and Stripe GETs and returns only allowlisted status fields and counts, with caching disabled. It never returns secrets, raw Stripe objects or card details. The one-time `/recover` form and POST were removed after successful recovery.
+
+The test suite includes in-memory PostgreSQL migrations and deterministic interleavings, plus a local mocked DOM for cart-reset and Cancel behavior. These tests do not access a browser, production Stripe, Supabase or Resend.
+
 ```bash
 npm install
 npm run typecheck

@@ -25,6 +25,7 @@ export type StripePaymentIntent = {
   payment_method_types?: string[];
   metadata: Record<string, string>;
   latest_charge?: string | StripeCharge | null;
+  payment_method?: string | Record<string, unknown> | null;
 };
 
 export const STRIPE_TERMINAL_SOURCE = "brickellhouse_terminal";

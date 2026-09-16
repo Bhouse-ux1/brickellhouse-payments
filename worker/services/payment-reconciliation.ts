@@ -324,7 +324,7 @@ export async function markPaymentFailed(input: {
     const [currentTransaction] = await tx.select().from(transactions)
       .where(eq(transactions.id, input.transactionId)).limit(1);
     if (!currentTransaction) throw new PaymentReconciliationError("Payment failure transition transaction is missing.");
-    if (currentTransaction.paymentStatus === "PAID") return false;
+    if (currentTransaction.paymentStatus === "PAID" || (currentTransaction.paymentStatus === "CANCELED" && !input.canceled)) return false;
     if (input.expectedPaymentIntentId !== undefined &&
         currentTransaction.stripePaymentIntentId !== input.expectedPaymentIntentId) return false;
     const expectedAttemptMapping = input.expectedPaymentIntentId === undefined
@@ -338,6 +338,7 @@ export async function markPaymentFailed(input: {
     }).where(and(
       eq(paymentAttempts.id, input.paymentAttemptId),
       ne(paymentAttempts.status, "SUCCEEDED"),
+      input.canceled ? undefined : ne(paymentAttempts.status, "CANCELED"),
       expectedAttemptMapping,
     ))
       .returning({ id: paymentAttempts.id });
@@ -345,20 +346,23 @@ export async function markPaymentFailed(input: {
       const [currentAttempt] = await tx.select().from(paymentAttempts)
         .where(eq(paymentAttempts.id, input.paymentAttemptId)).limit(1);
       if (currentAttempt?.status === "SUCCEEDED") return false;
+      if (currentAttempt?.status === "CANCELED" && !input.canceled) return false;
       if (input.expectedPaymentIntentId !== undefined &&
           currentAttempt?.stripePaymentIntentId !== input.expectedPaymentIntentId) return false;
       throw new PaymentReconciliationError("Payment failure transition affected no expected attempt row.");
     }
-    await tx.update(transactions).set({ paymentStatus: transactionStatus, updatedAt: now })
+    const [updatedTransaction] = await tx.update(transactions).set({ paymentStatus: transactionStatus, updatedAt: now })
       .where(and(
         eq(transactions.id, input.transactionId),
         ne(transactions.paymentStatus, "PAID"),
+        input.canceled ? undefined : ne(transactions.paymentStatus, "CANCELED"),
         input.expectedPaymentIntentId === undefined
           ? undefined
           : input.expectedPaymentIntentId === null
             ? isNull(transactions.stripePaymentIntentId)
             : eq(transactions.stripePaymentIntentId, input.expectedPaymentIntentId),
-      ));
+      )).returning({ id: transactions.id });
+    if (!updatedTransaction) throw new PaymentReconciliationError("Payment state changed during failure finalization.");
     if (input.releaseReader !== false) {
       await tx.update(terminalReaders).set({
         lockPaymentAttemptId: null, lockAcquiredAt: null, lockExpiresAt: null, updatedAt: now,

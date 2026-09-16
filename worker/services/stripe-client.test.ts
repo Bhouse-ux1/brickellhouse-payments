@@ -189,6 +189,7 @@ describe("live Stripe boundary", () => {
       expect(String(url)).toContain("/v1/terminal/readers/tmr_live/process_payment_intent");
       const form = init?.body as URLSearchParams;
       expect(form.get("payment_intent")).toBe("pi_live");
+      expect(form.get("process_config[enable_customer_cancellation]")).toBe("true");
       expect(new Headers(init?.headers).get("idempotency-key")).toBe("stable-attempt-key:reader");
       return new Response(JSON.stringify({ id: "tmr_live", object: "terminal.reader", livemode: true, location: "tml_live" }), { status: 200 });
     });
