@@ -4,6 +4,7 @@ import { productRoutes } from "@worker/routes/products";
 import { transactionRoutes } from "@worker/routes/transactions";
 import { accountingRoutes } from "@worker/routes/accounting";
 import { adminRoutes } from "@worker/routes/admin";
+import { createTerminalDiagnosticRoutes } from "@worker/routes/terminal-diagnostic";
 import { webhookRoutes } from "@worker/routes/webhooks";
 import { isApprovedLiveStripeKey } from "@worker/services/stripe-client";
 import { runScheduledDatabaseKeepalive } from "@worker/services/database-keepalive";
@@ -28,6 +29,7 @@ export function createApp() {
   app.route("/api/products", productRoutes);
   app.route("/api/transactions", transactionRoutes);
   app.route("/api/accounting", accountingRoutes);
+  app.route("/api/admin/diagnostics", createTerminalDiagnosticRoutes());
   app.route("/api/admin", adminRoutes);
   app.route("/api/webhooks", webhookRoutes);
   app.notFound((c) => c.json({ error: "Not found" }, 404));
