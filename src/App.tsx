@@ -9,7 +9,7 @@ import { meetsMinimumPayment, MINIMUM_PAYMENT_MESSAGE } from "@/domain/payments/
 import { cancellationCompleted, nextEmployeePaymentStatus, paymentActivationUi, paymentPhaseLabel } from "@/domain/payments/ui-state";
 import { productCatalog, type TrustedProduct } from "@/domain/products/catalog";
 import { MAX_QUANTITY, parseMoneyInput, parseQuantityInput } from "@/domain/transactions/validation";
-import { AccessLayout, Brand, PageHeader, PaymentAction } from "./ui/interface";
+import { AccessLayout, Brand, ClearedPaymentAnnouncement, PageHeader, PaymentAction, ProductCard } from "./ui/interface";
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 type EmployeeRole = "ADMIN" | "STAFF";
@@ -35,17 +35,16 @@ function Shell({ children, employeeName, employeeRole, onSignOut }: { children: 
   const initials = employeeName.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
   return <div className="shell">
     <a className="skipLink" href="#main-content">Skip to main content</a>
-    <aside className="rail">
+    <header className="topbar">
       <Brand/>
-      <p className="navCaption">Front desk</p>
       <nav aria-label="Primary">
         <NavLink to="/" end title="New Transaction"><CreditCard size={17}/><span>New Transaction</span></NavLink>
         <NavLink to="/transactions" title="Transactions"><ReceiptText size={17}/><span>Transactions</span></NavLink>
         {employeeRole === "ADMIN" && <NavLink to="/accounting" title="Accounting"><Landmark size={17}/><span>Accounting</span></NavLink>}
         {employeeRole === "ADMIN" && <NavLink to="/admin" title="Staff Access"><UserCog size={17}/><span>Staff Access</span></NavLink>}
       </nav>
-      <div className="employee"><span>{initials}</span><div>{employeeName}<small>{employeeRole === "ADMIN" ? "Administrator" : "Staff"}</small></div><button aria-label="Sign out" title="Sign out" onClick={onSignOut}><LogOut size={15}/></button></div>
-    </aside>
+      <div className="accountArea"><span className="terminalIndicator" title="Front desk S710 · Live payments"><CreditCard size={17} aria-hidden="true"/><span>S710<small>Live payments</small></span></span><div className="employee" title={`${employeeName} · ${employeeRole === "ADMIN" ? "Administrator" : "Staff"}`}><span>{initials}</span><div>{employeeName}<small>{employeeRole === "ADMIN" ? "Administrator" : "Staff"}</small></div><button aria-label="Sign out" title="Sign out" onClick={onSignOut}><LogOut size={17}/></button></div></div>
+    </header>
     <main className="page" id="main-content" tabIndex={-1}>{children}</main>
   </div>;
 }
@@ -177,6 +176,8 @@ function NewTransaction() {
   const canCharge = hasRequiredDetails && meetsMinimumPayment(total) && paymentUi.activationAllowed && !completedPayment;
   const canProcess = Boolean(activeTransactionId && breakdownReady && !processRequested && paymentStatus === "READY" && !canceling);
   const paymentPhase = breakdownReady && !processRequested ? "Reviewing breakdown" : paymentPhaseLabel(paymentStatus, Boolean(completedPayment));
+  const minimumWarning = total > 0 && !meetsMinimumPayment(total) && !activeTransactionId && !completedPayment;
+  const clearedCancellation = notice === "Payment canceled." && !activeTransactionId;
 
   function change(product: CatalogProduct, delta: number) {
     if (activeTransactionId) return;
@@ -254,42 +255,38 @@ function NewTransaction() {
   }
 
   return <>
-    <PageHeader title="New Transaction" description="Resident services, thoughtfully handled."><span className="terminalIndicator"><CreditCard size={17} aria-hidden="true"/><span>Front desk terminal<small>Live payments</small></span></span></PageHeader>
+    <PageHeader title="New Transaction" description="Charge resident items and services."><span className="internalBadge"><ShieldCheck size={16} aria-hidden="true"/>Employee use only</span></PageHeader>
     <div className="workspace">
       <section className="flow" aria-label="Resident and services">
         <div className="residentStrip">
-          <div className="step"><i aria-hidden="true">01</i><div><h2>Resident details</h2><p>Begin with the resident.</p></div></div>
           <label><span>Unit number</span><input value={unit} disabled={Boolean(activeTransactionId)} onChange={(e) => setUnit(e.target.value)} placeholder="2305" /></label>
           <label className="email"><span>Resident email</span><input value={email} disabled={Boolean(activeTransactionId)} onChange={(e) => setEmail(e.target.value)} type="email" placeholder="resident@example.com" /></label>
+          <div className="residentContext"><Building2 size={23} strokeWidth={1.4} aria-hidden="true"/><span>Resident details<small>For the payment receipt</small></span></div>
         </div>
-        <div className="sectionHead"><div className="step"><i aria-hidden="true">02</i><div><h2>Products & services</h2><p>Select from the resident service menu.</p></div></div><label className="search"><Search size={18} aria-hidden="true"/><input aria-label="Search products" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search products"/></label></div>
-        <div className="filters" aria-label="Service categories">{["All", "Access", "Keys", "Maintenance", "Printing", "Valet"].map((c) => <button key={c} aria-pressed={category === c} className={category === c ? "active" : ""} onClick={() => setCategory(c)}>{c}</button>)}</div>
+        <div className="catalogHead"><h2>Products &amp; Services</h2><label className="search"><Search size={18} aria-hidden="true"/><input aria-label="Search products" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search products"/></label><div className="filters" aria-label="Service categories">{["All", "Access", "Keys", "Maintenance", "Printing", "Valet"].map((c) => <button key={c} aria-pressed={category === c} className={category === c ? "active" : ""} onClick={() => setCategory(c)}>{c}</button>)}</div></div>
         {catalogState === "loading" && <div className="notice" role="status">Loading the trusted product catalog…</div>}
         {catalogState === "error" && <div className="notice" role="alert">The product catalog is temporarily unavailable.</div>}
-        <div className="products">{products.map((product) => { const Icon = icons[product.id] ?? Wrench; const qty = quantities[product.id] ?? 0; return <button key={product.id} disabled={Boolean(activeTransactionId)} aria-pressed={qty > 0} className={qty ? "product selected" : "product"} onClick={() => change(product, 1)}>
-          <span className="productIcon"><Icon size={23} strokeWidth={1.5} aria-hidden="true"/></span><span className="productCopy"><small>{product.category}</small><strong>{product.displayName}</strong><b>{money.format(product.priceCents / 100)}</b></span><span className="addMark" key={qty} aria-hidden="true">{qty ? <><span>{qty}</span><Plus size={13}/></> : <Plus size={18}/>}</span>
-        </button>; })}</div>
+        <div className="products">{products.map((product) => { const Icon = icons[product.id] ?? Wrench; return <ProductCard key={product.id} name={product.displayName} category={product.category} price={money.format(product.priceCents / 100)} icon={<Icon size={48} strokeWidth={1.2}/>} selectedQuantity={quantities[product.id] ?? 0} quantityAllowed={product.quantityAllowed} disabled={Boolean(activeTransactionId)} onAdd={quantity => change(product, quantity)}/>; })}</div>
         {catalogState === "ready" && products.length === 0 && <div className="serviceEmpty"><Search size={24} aria-hidden="true"/><h3>No services found</h3><p>Try another search or category.</p></div>}
         <div className="custom">
-          <div className="customTitle"><span className="customIcon"><Wrench size={21} aria-hidden="true"/></span><div><h3>Custom Charge</h3><p>A service beyond the menu.</p></div></div>
+          <h3>Custom Charge</h3>
           <label><span>Description</span><input value={description} disabled={Boolean(activeTransactionId)} onChange={(e) => setDescription(e.target.value)} placeholder="Describe the charge"/></label>
           <label className="amount"><span>Amount</span><div><i>$</i><input value={amount} disabled={Boolean(activeTransactionId)} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" placeholder="0.00"/></div></label>
           <button disabled={Boolean(activeTransactionId) || !amountCents || description.trim().length < 2} onClick={() => { if (amountCents) { setCustom({ description: description.trim(), amountCents }); setDescription(""); setAmount(""); } }}><Plus size={15}/>Add</button>
         </div>
       </section>
       <aside className="summary" aria-label="Current transaction summary" data-payment-state={canceling ? "canceling" : setupRecoveryRequired ? "recovery" : paymentStatus.toLowerCase()}>
-        <div className="summaryHead"><div><span className="folioLabel">Resident folio</span><h2>Current Transaction</h2></div><span className="folioCount">{selected.length + (custom ? 1 : 0)} {selected.length + (custom ? 1 : 0) === 1 ? "charge" : "charges"}</span></div>
-        <div className="paymentPhase"><span aria-hidden="true"/>{paymentPhase}</div>
+        <div className="summaryHead"><h2>Current Transaction</h2><span className="folioCount">{selected.length + (custom ? 1 : 0)} {selected.length + (custom ? 1 : 0) === 1 ? "item" : "items"}</span></div>
+        {(activeTransactionId || completedPayment) && <div className="paymentPhase" key={paymentPhase}><span aria-hidden="true"/>{paymentPhase}</div>}
         {completedPayment && <div className="paymentSuccess" role="status"><ShieldCheck size={22}/><div><strong>Payment successful</strong><span>{money.format(completedPayment.totalCents / 100)}{completedPayment.cardBrand && completedPayment.cardLastFour ? ` · ${completedPayment.cardBrand} •••• ${completedPayment.cardLastFour}` : ""}</span></div><button onClick={() => { setCompletedPayment(null); setNotice(""); setPaymentStatus("DRAFT"); }}>New Transaction</button></div>}
-        {(unit || email) && <div className="residentMini"><Building2 size={16}/><div><strong>{unit ? `Unit ${unit}` : "Unit pending"}</strong><small>{email || "Email pending"}</small></div></div>}
         <div className={selected.length || custom ? "lines" : "lines empty"}>
-          {!selected.length && !custom && <div className="emptyState"><span className="folioEmptyIcon"><ReceiptText size={30} strokeWidth={1.3} aria-hidden="true"/></span><strong>Your folio starts here</strong><span>Select a service or add a custom charge.<br/>The breakdown will appear here.</span></div>}
-          {selected.map((p) => <div className="line" key={p.id}><div><span><strong>{p.displayName}</strong><small className="unitPrice">{money.format(p.priceCents / 100)} each</small></span><b>{money.format(p.priceCents * quantities[p.id] / 100)}</b></div><div className="lineBottom"><span className="qty"><button aria-label={`Decrease ${p.displayName} quantity`} disabled={Boolean(activeTransactionId)} onClick={() => change(p, -1)}><Minus size={12}/></button><input aria-label={`${p.displayName} quantity`} disabled={Boolean(activeTransactionId) || !p.quantityAllowed} inputMode="numeric" min={1} max={MAX_QUANTITY} step={1} type="number" value={quantities[p.id]} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setQuantity(p, event.target.value)}/><button aria-label={`Increase ${p.displayName} quantity`} disabled={Boolean(activeTransactionId) || !p.quantityAllowed || quantities[p.id] >= MAX_QUANTITY} onClick={() => change(p, 1)}><Plus size={12}/></button></span><button className="remove" disabled={Boolean(activeTransactionId)} onClick={() => change(p, -MAX_QUANTITY)}>Remove</button></div></div>)}
-          {custom && <div className="line customLine"><div><span><small>Custom charge</small><strong>{custom.description}</strong></span><b>{money.format(custom.amountCents / 100)}</b></div><button className="remove" disabled={Boolean(activeTransactionId)} onClick={() => setCustom(null)}><X size={11}/>Remove</button></div>}
+          {!selected.length && !custom && <div className="emptyState"><ReceiptText size={28} strokeWidth={1.3} aria-hidden="true"/><strong>No items added</strong><span>Your selected charges will appear here.</span></div>}
+          {selected.map((p) => <div className="line" key={p.id}><div className="lineName"><strong>{p.displayName}</strong><small className="unitPrice">{money.format(p.priceCents / 100)} each</small></div><span className="qty"><button aria-label={`Decrease ${p.displayName} quantity`} disabled={Boolean(activeTransactionId)} onClick={() => change(p, -1)}><Minus size={12}/></button><input aria-label={`${p.displayName} quantity`} disabled={Boolean(activeTransactionId) || !p.quantityAllowed} inputMode="numeric" min={1} max={MAX_QUANTITY} step={1} type="number" value={quantities[p.id]} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setQuantity(p, event.target.value)}/><button aria-label={`Increase ${p.displayName} quantity`} disabled={Boolean(activeTransactionId) || !p.quantityAllowed || quantities[p.id] >= MAX_QUANTITY} onClick={() => change(p, 1)}><Plus size={12}/></button></span><b key={quantities[p.id]}>{money.format(p.priceCents * quantities[p.id] / 100)}</b><button className="remove" aria-label={`Remove ${p.displayName}`} title="Remove" disabled={Boolean(activeTransactionId)} onClick={() => change(p, -MAX_QUANTITY)}><X size={15}/></button></div>)}
+          {custom && <div className="line customLine"><div className="lineName"><strong>{custom.description}</strong><small>Custom charge</small></div><b>{money.format(custom.amountCents / 100)}</b><button className="remove" aria-label="Remove custom charge" title="Remove" disabled={Boolean(activeTransactionId)} onClick={() => setCustom(null)}><X size={15}/></button></div>}
         </div>
         <div className="totals"><div><span>Subtotal</span><b>{money.format(subtotal / 100)}</b></div><div><span>Processing fee</span><b>{money.format(fee / 100)}</b></div><div className="grand"><span>Total<small>USD</small></span><b key={total}>{money.format(total / 100)}</b></div></div>
-        {notice && <div className="notice" role="status" key={notice}>{notice}</div>}
-        <PaymentAction disabled={!(canProcess || canCharge) || charging || canceling} onClick={() => void prepareCharge(canProcess)} busy={charging || canceling || paymentStatus === "PROCESSING"} minimumBlocked={!meetsMinimumPayment(total) && !activeTransactionId && !completedPayment} success={paymentStatus === "PAID"} recovery={setupRecoveryRequired} label={canProcess ? "Process Payment" : setupRecoveryRequired ? "Terminal needs attention" : charging ? processRequested ? "Starting payment" : "Showing breakdown" : paymentStatus === "WAITING_FOR_CUSTOMER" ? "Payment in progress" : paymentStatus === "PROCESSING" ? "Processing payment" : paymentStatus === "PAID" ? "Payment successful" : activeTransactionId ? "Checking terminal" : "Show Breakdown"}/>
+        {clearedCancellation ? <ClearedPaymentAnnouncement/> : notice && <div className="notice" role="status" key={notice}>{notice}</div>}
+        <PaymentAction disabled={!(canProcess || canCharge) || charging || canceling} onClick={() => void prepareCharge(canProcess)} busy={charging || canceling || paymentStatus === "PROCESSING"} minimumBlocked={Boolean(minimumWarning)} success={paymentStatus === "PAID"} recovery={setupRecoveryRequired} label={canProcess ? "Process Payment" : setupRecoveryRequired ? "Terminal needs attention" : charging ? processRequested ? "Starting payment" : "Showing breakdown" : paymentStatus === "WAITING_FOR_CUSTOMER" ? "Payment in progress" : paymentStatus === "PROCESSING" ? "Processing payment" : paymentStatus === "PAID" ? "Payment successful" : activeTransactionId ? "Checking terminal" : "Show Breakdown"}/>
         {activeTransactionId && <button className="cancelPayment" disabled={canceling} onClick={async () => {
           if (cancelInFlight.current) return;
           cancelInFlight.current = true;
@@ -311,8 +308,8 @@ function NewTransaction() {
             if (epoch === flowEpoch.current) { setCanceling(false); requestInFlight.current = false; }
           }
         }}>{canceling ? "Checking cancellation…" : "Cancel"}</button>}
-        {!meetsMinimumPayment(total) && !activeTransactionId && !completedPayment && <p className="minimumHint" id="minimum-payment-guidance">{MINIMUM_PAYMENT_MESSAGE}</p>}
-        {!hasRequiredDetails && <p className="hint">Enter resident details and add a charge to continue.</p>}
+        {minimumWarning && <p className="minimumHint" id="minimum-payment-guidance">{MINIMUM_PAYMENT_MESSAGE}</p>}
+        {!hasRequiredDetails && !completedPayment && <p className="hint">{!selected.length && !custom ? "Add a charge to continue." : "Enter the resident’s unit and email to continue."}</p>}
       </aside>
     </div>
   </>;
@@ -437,7 +434,7 @@ function SignInPage() {
     });
     setWorking(false); setMessage("If this approved employee account exists, a password reset link has been sent.");
   }
-  return <AccessLayout><form className="signInPanel" onSubmit={(event) => { event.preventDefault(); void (forgot ? requestReset() : signIn()); }}><Brand className="signInBrand"/><span className="signInKicker">Internal payment management</span><h1>{forgot ? "Reset password" : "Sign in"}</h1><p>{forgot ? "Enter your approved employee email to receive a secure reset link." : "Use your approved BrickellHouse employee account."}</p><label className="accessPassword"><span>Email</span><input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} autoFocus /></label>{!forgot && <label className="accessPassword"><span>Password</span><input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>}<button type="submit" disabled={!email || (!forgot && !password) || working}>{working ? "Please wait…" : forgot ? "Send reset link" : "Sign In"}</button><button className="forgotButton" type="button" onClick={() => { setForgot(!forgot); setMessage(""); }}>{forgot ? "Back to Sign In" : "Forgot Password"}</button>{message && <div role="status">{message}</div>}</form></AccessLayout>;
+  return <AccessLayout><form className="signInPanel" onSubmit={(event) => { event.preventDefault(); void (forgot ? requestReset() : signIn()); }}><span className="signInKicker">Internal payment management</span><h1>{forgot ? "Reset password" : "Sign in"}</h1><p>{forgot ? "Enter your approved employee email to receive a secure reset link." : "Use your approved BrickellHouse employee account."}</p><label className="accessPassword"><span>Email</span><input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} autoFocus /></label>{!forgot && <label className="accessPassword"><span>Password</span><input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>}<button type="submit" disabled={!email || (!forgot && !password) || working}>{working ? "Please wait…" : forgot ? "Send reset link" : "Sign In"}</button><button className="forgotButton" type="button" onClick={() => { setForgot(!forgot); setMessage(""); }}>{forgot ? "Back to Sign In" : "Forgot Password"}</button>{message && <div role="status">{message}</div>}</form></AccessLayout>;
 }
 
 function ResetPasswordPage() {
@@ -445,7 +442,7 @@ function ResetPasswordPage() {
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState(token ? "" : "This password reset link is invalid or expired.");
   const [working, setWorking] = useState(false);
-  return <AccessLayout><form className="signInPanel" onSubmit={async (event) => { event.preventDefault(); if (!token) return; setWorking(true); const response = await fetch("/api/auth/reset-password", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ newPassword: password, token }) }); setWorking(false); setMessage(response.ok ? "Password set. You can now sign in." : "This password reset link is invalid or expired."); }}><Brand className="signInBrand"/><span className="signInKicker">Secure employee access</span><h1>Set password</h1><p>Choose at least 12 characters. All existing sessions are revoked when a password is reset.</p><label className="accessPassword"><span>New password</span><input type="password" autoComplete="new-password" minLength={12} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} autoFocus /></label><button type="submit" disabled={!token || password.length < 12 || working}>{working ? "Saving…" : "Set password"}</button><button className="forgotButton" type="button" onClick={() => window.location.assign("/")}>Back to Sign In</button>{message && <div role="status">{message}</div>}</form></AccessLayout>;
+  return <AccessLayout><form className="signInPanel" onSubmit={async (event) => { event.preventDefault(); if (!token) return; setWorking(true); const response = await fetch("/api/auth/reset-password", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ newPassword: password, token }) }); setWorking(false); setMessage(response.ok ? "Password set. You can now sign in." : "This password reset link is invalid or expired."); }}><span className="signInKicker">Secure employee access</span><h1>Set password</h1><p>Choose at least 12 characters. All existing sessions are revoked when a password is reset.</p><label className="accessPassword"><span>New password</span><input type="password" autoComplete="new-password" minLength={12} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} autoFocus /></label><button type="submit" disabled={!token || password.length < 12 || working}>{working ? "Saving…" : "Set password"}</button><button className="forgotButton" type="button" onClick={() => window.location.assign("/")}>Back to Sign In</button>{message && <div role="status">{message}</div>}</form></AccessLayout>;
 }
 
 function Application({ employeeName, employeeRole, onSignOut }: { employeeName: string; employeeRole: EmployeeRole; onSignOut: () => void }) {
