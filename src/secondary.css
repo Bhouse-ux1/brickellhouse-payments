@@ -1,15 +1,123 @@
-.outlineAction{height:35px;padding:0 12px;border:1px solid var(--line);border-radius:4px;background:var(--paper);display:flex;align-items:center;gap:6px;color:var(--forest);font-size:10px}.outlineAction:disabled{color:#999d98;background:#f0ede6;cursor:not-allowed}
-.records,.accountingPage{padding:24px 28px 40px;max-width:1400px;margin:auto}.recordTools{display:flex;align-items:end;gap:9px;margin-bottom:12px}.recordTools>label:not(.recordSearch)>span{display:block;margin-bottom:5px;color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.08em}.recordTools input{height:36px;border:1px solid var(--line);background:var(--paper);padding:0 10px;color:var(--ink);font-size:10px}.recordSearch{width:min(380px,100%);height:36px;border:1px solid var(--line);background:var(--paper);display:flex;align-items:center;gap:8px;padding:0 10px;color:var(--muted)}.recordSearch input{min-width:0;flex:1;padding:0;border:0;outline:0;background:transparent}
-.recordTable{border:1px solid var(--line);background:var(--paper)}.recordHead{height:42px;padding:0 14px;display:grid;grid-template-columns:1fr .8fr .6fr 1.4fr .7fr .6fr;align-items:center;border-bottom:1px solid var(--line);background:#f0ede6;color:#717670;font-size:8px;text-transform:uppercase;letter-spacing:.08em}.recordEmpty{min-height:350px;display:grid;place-content:center;justify-items:center;text-align:center;color:#7b817c}.recordEmpty strong{margin-top:10px;color:var(--ink);font-size:12px;font-weight:560}.recordEmpty p{margin:5px 0 0;font-size:10px}
-.historyNote{margin-bottom:12px;padding:10px 12px;border:1px solid #d8cfbf;background:#f3ede1;color:#665a43;font-size:10px}.recordRow{min-height:54px;padding:8px 14px;display:grid;grid-template-columns:1fr .8fr .6fr 1.4fr .7fr .6fr;align-items:center;border-bottom:1px solid var(--line);font-size:9.5px}.recordRow:last-child{border-bottom:0}.recordRow>strong{font-weight:620;color:var(--forest)}.recordRow>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#555c56}.recordRow>b{text-align:right;font-size:10px}.historyStatus{width:max-content;max-width:100%;padding:4px 6px;border-radius:3px;background:#e7ece7;color:#4d6253;font-size:8px;font-style:normal}.historyStatus.abandoned-attempt{background:#eee7da;color:#715c37}.historyStatus.canceled-attempt,.historyStatus.failed-attempt{background:#f1e4e2;color:#8b514a}.historyStatus.in-progress{background:#e3ece9;color:#315d50}.historyStateCell{display:flex;align-items:flex-start;flex-direction:column;gap:5px}.historyStateCell button{padding:0;border:0;background:transparent;color:var(--forest);font-size:8px;text-decoration:underline;cursor:pointer}
-.accountingIntro{min-height:80px;padding:15px 16px;border:1px solid var(--line);background:var(--paper);display:flex;align-items:center;justify-content:space-between}.accountingIntro span{color:var(--forest);font-size:8px;text-transform:uppercase;letter-spacing:.1em}.accountingIntro h2{margin:3px 0 2px;font-size:17px;font-weight:520}.accountingIntro p{margin:0;color:var(--muted);font-size:10px}.accountingIntro label{height:35px;padding:0 9px;display:flex;align-items:center;gap:7px;border:1px solid var(--line);color:var(--forest)}.accountingIntro input{border:0;outline:0;background:transparent;color:var(--ink);font-size:10px}
-.glRows{margin-top:12px;border:1px solid var(--line);background:var(--paper)}.glRow{min-height:78px;padding:13px 17px;display:grid;grid-template-columns:1fr 150px 130px;align-items:center;border-bottom:1px solid var(--line)}.glRow:last-child{border-bottom:0}.glRow>div:first-child>span{color:var(--forest);font-size:13px;font-weight:620}.glRow p{margin:4px 0 0;color:var(--muted);font-size:10px}.glRow>div:nth-child(2) small,.glRow>div:nth-child(2) b{display:block}.glRow small{color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.07em}.glRow b{margin-top:4px;font-size:12px;font-weight:550}.glRow>strong{text-align:right;color:var(--forest-dark);font-size:18px;font-weight:580}.accountingEmpty{margin-top:12px;padding:13px 15px;display:flex;align-items:center;gap:11px;border:1px solid #d8cfbf;background:#eee7da;color:#715c37}.accountingEmpty strong{display:block;font-size:10px}.accountingEmpty p{margin:3px 0 0;font-size:9px}
-.signInPage,.sessionLoading{min-height:100vh;display:grid;place-items:center;padding:24px;background:#ede7dc}.sessionLoading{color:var(--forest);font-size:12px}.signInPanel{width:min(390px,100%);padding:34px;background:var(--paper);border:1px solid #d5cfc3;box-shadow:0 18px 50px #463b2812}.signInBrand{display:flex;align-items:center;gap:10px;margin-bottom:32px;font-size:13px}.signInBrand>span{width:37px;height:37px;display:grid;place-items:center;background:var(--forest-dark);color:white;font-size:11px}.signInBrand small{display:block;margin-top:2px;color:var(--muted);font-size:8px;letter-spacing:.12em;text-transform:uppercase}.signInKicker{color:var(--forest);font-size:9px;letter-spacing:.14em;text-transform:uppercase}.signInPanel h1{margin:5px 0 8px;font-size:24px;font-weight:520;letter-spacing:-.035em}.signInPanel>p{margin:0 0 24px;color:var(--muted);font-size:11px;line-height:1.55}.signInPanel>button{width:100%;height:42px;border:0;border-radius:4px;background:var(--forest);color:white;font-size:11px}.signInPanel>div[role=status]{margin-top:12px;padding:9px;background:#f6ecda;color:#765d35;font-size:9px}
-@media(max-width:700px){.records,.accountingPage{padding:14px 10px 76px}.recordTools{align-items:stretch;flex-wrap:wrap}.recordSearch{width:100%}.recordHead,.recordRow{grid-template-columns:1fr .7fr .5fr .6fr}.recordHead span:nth-child(4),.recordHead span:nth-child(5),.recordRow>span:nth-child(4),.recordRow>span:nth-child(5){display:none}.glRow{grid-template-columns:1fr 70px 85px}.pageHeader .outlineAction{display:none}}
-.statusDot.live{color:#7b433e}.statusDot.live:before{background:#a74f45;box-shadow:0 0 0 4px #ead1cd}
-.cancelPayment{width:calc(100% - 34px);height:34px;margin:8px 17px 0;border:1px solid #cdbab5;background:#fffaf6;color:#8b514a;border-radius:4px;font-size:9px}.cancelPayment:disabled{opacity:.55;cursor:not-allowed}
-.accessPassword{display:block;margin-bottom:14px}.accessPassword span{display:block;margin-bottom:6px;color:#60645f;font-size:8.5px;letter-spacing:.1em;text-transform:uppercase}.accessPassword input{width:100%;height:42px;padding:0 11px;border:1px solid #cfc9bd;border-radius:4px;background:#fffefa}.signInPanel>button:disabled{opacity:.55;cursor:not-allowed}
-.employee>div{min-width:0;flex:1}.employee>button{width:30px;height:30px;display:grid;place-items:center;border:0;background:transparent;color:#b7c5be}.employee>button:hover{color:white}
-.signInPanel>.forgotButton{margin-top:8px;background:transparent;color:var(--forest);height:34px}.adminPage{max-width:1200px;margin:0 auto;padding:24px 28px 50px}.adminCreate,.adminUsers{padding:20px;border:1px solid var(--line);background:var(--paper)}.adminUsers{margin-top:12px}.adminCreate h2,.adminUsers h2{margin:0;font-size:17px;font-weight:550}.adminCreate>p{margin:6px 0 16px;color:var(--muted);font-size:10px}.adminCreate>div{display:grid;grid-template-columns:1fr 1.3fr 110px 120px;gap:9px;align-items:end}.adminCreate label span{display:block;margin-bottom:5px;color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.08em}.adminCreate input,.adminCreate select,.adminUser select{width:100%;height:38px;border:1px solid var(--line);background:#fffefa;padding:0 9px;color:var(--ink);font-size:10px}.adminCreate button,.adminUser button{height:38px;border:0;border-radius:3px;background:var(--forest);color:white;font-size:9px;padding:0 12px}.adminCreate button:disabled{opacity:.5}.adminCreate .historyNote{grid-column:1/-1;margin:2px 0 0}.adminUser{min-height:66px;display:grid;grid-template-columns:1fr 110px 80px 100px;gap:8px;align-items:center;border-bottom:1px solid var(--line)}.adminUser:last-child{border-bottom:0}.adminUser strong,.adminUser span,.adminUser small{display:block}.adminUser strong{font-size:11px}.adminUser span{margin-top:3px;color:var(--muted);font-size:9px}.adminUser small{margin-top:4px;color:var(--forest);font-size:8px}.adminUser button{height:32px;background:#eee7da;color:#6d5b39}
-@media(max-width:700px){.adminPage{padding:14px 10px 76px}.adminCreate>div{grid-template-columns:1fr}.adminUser{grid-template-columns:1fr 90px}.adminUser button{display:none}}
-.qty input{width:38px;height:100%;padding:0 2px;border:0;border-left:1px solid var(--line);border-right:1px solid var(--line);outline:0;background:#fffefa;text-align:center;font-size:9px;appearance:textfield}.qty input::-webkit-inner-spin-button,.qty input::-webkit-outer-spin-button{margin:0;appearance:none}.qty input:disabled{color:var(--ink);background:#f4f3ef}
+/* Shared activity, allocations, staff, and employee access surfaces. */
+.outlineAction { display: inline-flex; align-items: center; justify-content: center; gap: 9px; min-height: 42px; padding: 10px var(--space-4); border: 1px solid var(--line-strong); background: var(--surface); color: var(--forest); font-size: var(--text-sm); }
+.outlineAction:disabled { color: #737e72; background: #eff0e8; border-color: var(--line); }
+.records, .accountingPage, .adminPage { max-width: 1600px; margin: auto; padding: 5px 36px var(--space-8); }
+.recordTools { display: flex; align-items: end; gap: 15px; margin-bottom: 26px; }
+.recordSearch { width: min(420px,100%); height: 46px; margin-right: auto; }
+.recordTools>label:not(.recordSearch)>span { display: block; margin-bottom: 7px; color: var(--muted); font-size: 13px; }
+.recordTools input { font-size: var(--text-sm); }
+.recordTable { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: white; box-shadow: var(--shadow-sm); }
+.recordHead, .recordRow { display: grid; grid-template-columns: 1.1fr 1.2fr .5fr 1.5fr 1.4fr .65fr; align-items: center; gap: var(--space-4); padding-inline: var(--space-5); }
+.recordHead { min-height: 52px; background: #edf1e8; color: #57694f; border-bottom: 1px solid var(--line); font-size: 13px; }
+.recordHead>span:last-child { text-align: right; }
+.recordRow { min-height: 102px; padding-block: 21px; border-bottom: 1px solid var(--line); font-size: var(--text-sm); transition: background var(--duration); }
+.recordRow:last-child { border: 0; } .recordRow:hover { background: #fafbf7; }
+.recordRow>* { min-width: 0; overflow-wrap: anywhere; }
+.recordRow>strong { color: var(--forest); font-weight: 500; }
+.recordRow>span { color: var(--muted); }
+.recordRow>b { text-align: right; font-weight: 500; font-size: var(--text-base); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.recordEmpty { min-height: 340px; padding: 38px var(--space-5); display: flex; flex-direction: column; align-items: center; justify-content: center; color: #849178; text-align: center; }
+.recordEmpty>[role="cell"] { display: flex; flex-direction: column; align-items: center; }
+.recordEmpty svg { width: 40px; height: 40px; padding: var(--space-2); box-sizing: content-box; border: 1px solid var(--line); border-radius: 12px; }
+.recordEmpty strong { margin-top: 21px; color: var(--ink); font-size: var(--text-lg); font-weight: 500; }
+.recordEmpty p { margin: var(--space-2) 0 0; font-size: var(--text-sm); color: var(--muted); }
+.historyNote { margin-bottom: 20px; padding: 15px 18px; border: 1px solid #d3dccb; border-radius: var(--radius-sm); background: #eef3e7; color: #526447; font-size: var(--text-sm); line-height: 1.6; animation: enterSoft var(--duration) var(--ease); }
+.historyStateCell { display: flex; flex-direction: column; align-items: flex-start; gap: 9px; }
+.historyStatus { display: inline-block; padding: 5px 9px; background: #ecf3e7; color: #42613a; border-radius: var(--radius-sm); font-size: var(--text-xs); line-height: 1.4; font-style: normal; }
+.historyStatus.abandoned-attempt, .historyStatus.canceled-attempt { color: #716348; background: #f3efe5; }
+.historyStatus.failed-attempt { color: var(--crimson); background: var(--crimson-soft); }
+.historyStatus.in-progress { color: #366252; background: #eaf1ec; }
+.historyStateCell button { min-height: 28px; padding: 0; border: 0; background: transparent; color: var(--forest); text-decoration: underline; text-underline-offset: 4px; font-size: 13px; }
+.accountingIntro { display: flex; align-items: center; justify-content: space-between; gap: var(--space-5); padding: 30px; border: 1px solid var(--line); border-radius: var(--radius); background: white; }
+.accountingIntro span { font-size: var(--text-sm); color: var(--muted); }
+.accountingIntro h2 { margin: 6px 0 9px; font: 400 25px/1.3 Georgia,serif; }
+.accountingIntro p { margin: 0; color: var(--muted); font-size: var(--text-base); }
+.accountingIntro label { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); padding: 0 13px; background: var(--surface); color: var(--forest); }
+.accountingIntro input { border: 0; padding: 0; background: transparent; font-size: var(--text-sm); }
+.glRows { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-5); margin-top: var(--space-5); }
+.glRow { padding: 27px 30px; border: 1px solid var(--line); border-radius: var(--radius); background: white; display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 28px; }
+.glRow>div:first-child { grid-column: 1/-1; padding-bottom: 22px; border-bottom: 1px solid var(--line); }
+.glRow>div:first-child>span { display: inline-block; padding: var(--space-1) 10px; border: 1px solid #cfdbc7; border-radius: var(--radius-sm); color: var(--forest); font-size: var(--text-sm); }
+.glRow p { margin: var(--space-4) 0 0; font-size: 17px; color: var(--ink); }
+.glRow small { display: block; color: var(--muted); font-size: var(--text-sm); }
+.glRow b { display: block; margin-top: 6px; font-weight: 400; font-size: 22px; }
+.glRow>strong { font-size: 29px; line-height: 1.3; color: var(--forest); font-weight: 400; letter-spacing: -.6px; }
+.accountingEmpty { display: flex; gap: 14px; align-items: center; margin-top: 28px; padding: 22px var(--space-5); color: #637856; border: 1px solid #d9e0d0; background: #eff3e9; border-radius: var(--radius-sm); }
+.accountingEmpty strong { display: block; font-size: var(--text-base); font-weight: 500; color: var(--forest); }
+.accountingEmpty p { margin: var(--space-1) 0 0; font-size: var(--text-sm); }
+.adminCreate, .adminUsers { padding: 28px 30px; border: 1px solid var(--line); border-radius: var(--radius); background: white; }
+.adminUsers { margin-top: var(--space-5); }
+.adminCreate h2, .adminUsers h2 { margin: 0; font-size: 22px; font-weight: 500; }
+.adminCreate>p { margin: var(--space-2) 0 25px; color: var(--muted); font-size: var(--text-sm); max-width: 650px; }
+.adminCreate>div:not(.historyNote) { display: grid; grid-template-columns: 1fr 1.2fr 125px 140px; align-items: end; gap: 18px; }
+.adminCreate label span { display: block; margin-bottom: var(--space-2); color: var(--ink); font-size: var(--text-sm); }
+.adminCreate input, .adminCreate select, .adminUser select { width: 100%; font-size: var(--text-sm); }
+.adminCreate button { min-height: 46px; padding: 10px 15px; border: 1px solid var(--forest); background: var(--forest); color: white; font-size: var(--text-sm); }
+.adminCreate button:hover:not(:disabled) { background: var(--forest-dark); }
+.adminCreate button:disabled { color: #68745f; background: #e6eadf; border-color: #d3dbcb; }
+.adminCreate .historyNote { margin: 22px 0 0; }
+.adminUser { display: grid; grid-template-columns: minmax(0,1fr) 128px 86px 112px; align-items: center; gap: 15px; min-height: 116px; padding: var(--space-5) 0; border-bottom: 1px solid var(--line); }
+.adminUser:last-child { border-bottom: 0; padding-bottom: 0; }
+.adminUser strong, .adminUser span, .adminUser small { display: block; }
+.adminUser strong { font-size: 16px; font-weight: 500; }
+.adminUser span { margin-top: var(--space-1); color: var(--muted); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.adminUser small { margin-top: var(--space-2); font-size: 13px; color: #617951; }
+.adminUser button { min-height: 42px; padding: 9px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--forest); font-size: 13px; }
+.adminUser button:hover { background: var(--sage); border-color: var(--forest); }
+
+/* Employee access: an architectural welcome with a quiet, legible form. */
+.signInPage { min-height: 100vh; display: grid; grid-template-columns: minmax(300px,.9fr) minmax(460px,1.1fr); background: var(--canvas); }
+.accessWelcome { position: relative; isolation: isolate; display: flex; flex-direction: column; overflow: hidden; padding: var(--space-8) 54px var(--space-6); background: var(--forest-deep); color: #f8f4e6; }
+.accessWelcome .brand { font-size: 24px; } .accessWelcome .brandMonogram { width: 46px; height: 52px; }
+.accessIntroduction { margin-block: auto; padding-block: 70px 180px; position: relative; z-index: 1; }
+.accessIntroduction>span { display: block; margin-bottom: var(--space-4); color: #c4cfb9; font-size: var(--text-base); }
+.accessIntroduction h2 { margin: 0 0 18px; font: 400 clamp(36px,3.5vw,50px)/1.2 Georgia,serif; letter-spacing: -1px; }
+.accessIntroduction p { max-width: 260px; font-size: 16px; line-height: 1.7; color: #c8d2c3; margin: 0; }
+.accessLocation { margin: 0; position: relative; z-index: 1; font-size: 13px; letter-spacing: .5px; color: #bbc9b8; }
+.architecturalLines { position: absolute; z-index: -1; width: 400px; height: 430px; right: -40px; bottom: -65px; border: 1px solid #bfbfa62a; border-radius: 50% 50% 0 0; display: flex; justify-content: space-evenly; padding: 28px; transform: rotate(-10deg); }
+.architecturalLines::before, .architecturalLines::after { content: ""; position: absolute; inset: 24px; border: 1px solid #bfbfa61c; border-radius: inherit; } .architecturalLines::after { inset: 48px; }
+.architecturalLines i { width: 1px; height: 100%; background: #bfbfa620; }
+.accessFormArea { min-width: 0; padding: 54px var(--space-7) 25px; display: flex; flex-direction: column; justify-content: center; align-items: center; }
+.signInPanel { width: min(406px,100%); padding: 0; margin: auto 0; }
+.signInBrand { margin-bottom: 42px; color: var(--forest); } .signInBrand .brandMonogram { border-color: #a9b99e; } .signInBrand small { color: var(--muted); }
+.signInKicker { display: block; color: #697658; font-size: var(--text-sm); margin-bottom: 11px; }
+.signInPanel h1 { margin: 0 0 14px; font: 400 34px/1.2 Georgia,serif; color: var(--forest-deep); letter-spacing: -.7px; }
+.signInPanel>p { margin: 0 0 29px; color: var(--muted); font-size: var(--text-base); line-height: 1.7; }
+.accessPassword { display: block; margin-bottom: 20px; } .accessPassword span { display: block; margin-bottom: var(--space-2); font-size: var(--text-sm); color: var(--ink); }
+.accessPassword input { width: 100%; height: 49px; }
+.signInPanel>button { width: 100%; min-height: 49px; padding: var(--space-3) 18px; border: 1px solid var(--forest); background: var(--forest); color: white; font-size: var(--text-base); }
+.signInPanel>button:hover:not(:disabled) { background: var(--forest-dark); }
+.signInPanel>button:disabled { color: #697660; background: #e4e9dd; border-color: #d3dbc9; }
+.signInPanel>.forgotButton { margin-top: 13px; border-color: transparent; background: transparent; color: var(--forest); font-size: var(--text-sm); }
+.signInPanel>.forgotButton:hover { background: #e9eee1; }
+.signInPanel>div[role="status"] { margin-top: 18px; padding: 15px; color: #6e5a3b; background: #f0ebdd; border: 1px solid #dfd5bf; border-radius: var(--radius-sm); font-size: var(--text-sm); line-height: 1.6; animation: enterSoft var(--duration) var(--ease); }
+.accessFooter { margin: 36px 0 0; color: var(--muted); font-size: var(--text-xs); text-align: center; }
+.sessionLoading { min-height: 100vh; display: grid; place-items: center; padding: 30px; color: var(--forest); font-size: 16px; background: var(--canvas); }
+
+@media (max-width: 1190px) { .records, .accountingPage, .adminPage { padding-inline: 26px; } .recordHead, .recordRow { padding-inline: 20px; gap: var(--space-3); } }
+@media (max-width: 1000px) {
+  .adminCreate>div:not(.historyNote) { grid-template-columns: 1fr 1fr; }
+  .recordTable { background: transparent; border: 0; box-shadow: none; overflow: visible; }
+  .recordHead { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); }
+  .recordRow { display: grid; grid-template-columns: 1fr 1fr 1fr; padding: 22px; margin-bottom: 15px; border: 1px solid var(--line); border-radius: var(--radius); background: white; gap: 22px; align-items: start; }
+  .recordRow:last-child { border: 1px solid var(--line); }
+  .recordRow>*::before { content: attr(data-label); display: block; color: var(--muted); font-size: var(--text-xs); margin-bottom: 7px; font-weight: 400; }
+  .recordRow>b { text-align: left; } .historyStateCell { gap: 0; } .historyStateCell button { margin-top: 6px; }
+  .recordEmpty { border: 1px solid var(--line); border-radius: var(--radius); background: white; }
+  .recordTools { flex-wrap: wrap; } .recordSearch { width: 100%; flex-basis: 100%; }
+  .signInPage { grid-template-columns: minmax(260px,.8fr) minmax(370px,1fr); } .accessWelcome { padding-inline: var(--space-6); }
+}
+@media (max-width: 760px) {
+  .accountingIntro { flex-direction: column; align-items: flex-start; padding: var(--space-5); } .glRows { grid-template-columns: 1fr; gap: 18px; }
+  .adminCreate, .adminUsers { padding: var(--space-5); } .adminUser { grid-template-columns: minmax(0,1fr) 110px; gap: var(--space-3); }
+  .adminUser>div { grid-column: 1/-1; } .adminUser>select { grid-column: 1; } .adminUser>button:last-child:not(:nth-child(3)) { grid-column: 2; }
+  .signInPage { display: block; } .accessWelcome { padding: 23px 28px; } .accessWelcome .brand { font-size: var(--text-section); }
+  .accessWelcome .brandMonogram { width: 36px; height: 42px; } .accessIntroduction, .accessLocation, .architecturalLines { display: none; }
+  .accessFormArea { padding: 42px 28px var(--space-5); min-height: calc(100vh - 91px); } .signInPanel .signInBrand { display: none; }
+}
+@media (max-width: 600px) {
+  .records, .accountingPage, .adminPage { padding: 0 var(--space-4) var(--space-6); } .recordRow { grid-template-columns: 1fr 1fr; padding: 22px; gap: 20px; }
+  .recordTools { gap: 13px; } .recordTools>label:not(.recordSearch) { width: calc(50% - 7px); } .recordTools>label>input { max-width: 100%; }
+  .outlineAction { padding: 9px; font-size: var(--text-xs); gap: 5px; } .adminCreate>div:not(.historyNote) { grid-template-columns: 1fr; gap: 17px; }
+  .glRow { padding: var(--space-5); } .accountingEmpty { align-items: flex-start; padding: 20px; }
+}

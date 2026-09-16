@@ -9,7 +9,7 @@ import { meetsMinimumPayment, MINIMUM_PAYMENT_MESSAGE } from "@/domain/payments/
 import { cancellationCompleted, nextEmployeePaymentStatus, paymentActivationUi, paymentPhaseLabel } from "@/domain/payments/ui-state";
 import { productCatalog, type TrustedProduct } from "@/domain/products/catalog";
 import { MAX_QUANTITY, parseMoneyInput, parseQuantityInput } from "@/domain/transactions/validation";
-import "./payment-success.css";
+import { AccessLayout, Brand, PageHeader, PaymentAction } from "./ui/interface";
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 type EmployeeRole = "ADMIN" | "STAFF";
@@ -34,17 +34,19 @@ const icons: Record<string, ComponentType<{ size?: number; strokeWidth?: number 
 function Shell({ children, employeeName, employeeRole, onSignOut }: { children: ReactNode; employeeName: string; employeeRole: EmployeeRole; onSignOut: () => void }) {
   const initials = employeeName.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
   return <div className="shell">
+    <a className="skipLink" href="#main-content">Skip to main content</a>
     <aside className="rail">
-      <div className="brand"><span>BH</span><div>BrickellHouse<small>Management</small></div></div>
+      <Brand/>
+      <p className="navCaption">Front desk</p>
       <nav aria-label="Primary">
-        <NavLink to="/" end><CreditCard size={17}/><span>New Transaction</span></NavLink>
-        <NavLink to="/transactions"><ReceiptText size={17}/><span>Transactions</span></NavLink>
-        {employeeRole === "ADMIN" && <NavLink to="/accounting"><Landmark size={17}/><span>Accounting</span></NavLink>}
-        {employeeRole === "ADMIN" && <NavLink to="/admin"><UserCog size={17}/><span>Staff Access</span></NavLink>}
+        <NavLink to="/" end title="New Transaction"><CreditCard size={17}/><span>New Transaction</span></NavLink>
+        <NavLink to="/transactions" title="Transactions"><ReceiptText size={17}/><span>Transactions</span></NavLink>
+        {employeeRole === "ADMIN" && <NavLink to="/accounting" title="Accounting"><Landmark size={17}/><span>Accounting</span></NavLink>}
+        {employeeRole === "ADMIN" && <NavLink to="/admin" title="Staff Access"><UserCog size={17}/><span>Staff Access</span></NavLink>}
       </nav>
       <div className="employee"><span>{initials}</span><div>{employeeName}<small>{employeeRole === "ADMIN" ? "Administrator" : "Staff"}</small></div><button aria-label="Sign out" title="Sign out" onClick={onSignOut}><LogOut size={15}/></button></div>
     </aside>
-    <main className="page">{children}</main>
+    <main className="page" id="main-content" tabIndex={-1}>{children}</main>
   </div>;
 }
 
@@ -252,40 +254,42 @@ function NewTransaction() {
   }
 
   return <>
-    <header className="pageHeader"><div><span>Payments</span><h1>New Transaction</h1><p>Prepare a resident payment for the front desk terminal.</p></div><span className="statusDot live">Physical S710 · Live mode</span></header>
+    <PageHeader title="New Transaction" description="Resident services, thoughtfully handled."><span className="terminalIndicator"><CreditCard size={17} aria-hidden="true"/><span>Front desk terminal<small>Live payments</small></span></span></PageHeader>
     <div className="workspace">
-      <section className="flow">
+      <section className="flow" aria-label="Resident and services">
         <div className="residentStrip">
-          <div className="step"><i>1</i><div><span>Resident</span><small>Who is being charged?</small></div></div>
+          <div className="step"><i aria-hidden="true">01</i><div><h2>Resident details</h2><p>Begin with the resident.</p></div></div>
           <label><span>Unit number</span><input value={unit} disabled={Boolean(activeTransactionId)} onChange={(e) => setUnit(e.target.value)} placeholder="2305" /></label>
           <label className="email"><span>Resident email</span><input value={email} disabled={Boolean(activeTransactionId)} onChange={(e) => setEmail(e.target.value)} type="email" placeholder="resident@example.com" /></label>
         </div>
-        <div className="sectionHead"><div><span>2 · Add charges</span><h2>Products & services</h2></div><label className="search"><Search size={15}/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search products"/></label></div>
-        <div className="filters">{["All", "Access", "Keys", "Maintenance", "Printing", "Valet"].map((c) => <button key={c} className={category === c ? "active" : ""} onClick={() => setCategory(c)}>{c}</button>)}</div>
+        <div className="sectionHead"><div className="step"><i aria-hidden="true">02</i><div><h2>Products & services</h2><p>Select from the resident service menu.</p></div></div><label className="search"><Search size={18} aria-hidden="true"/><input aria-label="Search products" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search products"/></label></div>
+        <div className="filters" aria-label="Service categories">{["All", "Access", "Keys", "Maintenance", "Printing", "Valet"].map((c) => <button key={c} aria-pressed={category === c} className={category === c ? "active" : ""} onClick={() => setCategory(c)}>{c}</button>)}</div>
+        {catalogState === "loading" && <div className="notice" role="status">Loading the trusted product catalog…</div>}
+        {catalogState === "error" && <div className="notice" role="alert">The product catalog is temporarily unavailable.</div>}
+        <div className="products">{products.map((product) => { const Icon = icons[product.id] ?? Wrench; const qty = quantities[product.id] ?? 0; return <button key={product.id} disabled={Boolean(activeTransactionId)} aria-pressed={qty > 0} className={qty ? "product selected" : "product"} onClick={() => change(product, 1)}>
+          <span className="productIcon"><Icon size={23} strokeWidth={1.5} aria-hidden="true"/></span><span className="productCopy"><small>{product.category}</small><strong>{product.displayName}</strong><b>{money.format(product.priceCents / 100)}</b></span><span className="addMark" key={qty} aria-hidden="true">{qty ? <><span>{qty}</span><Plus size={13}/></> : <Plus size={18}/>}</span>
+        </button>; })}</div>
+        {catalogState === "ready" && products.length === 0 && <div className="serviceEmpty"><Search size={24} aria-hidden="true"/><h3>No services found</h3><p>Try another search or category.</p></div>}
         <div className="custom">
-          <div className="customTitle"><Wrench size={18}/><div><span>Custom Charge</span><small>For an item not listed</small></div></div>
+          <div className="customTitle"><span className="customIcon"><Wrench size={21} aria-hidden="true"/></span><div><h3>Custom Charge</h3><p>A service beyond the menu.</p></div></div>
           <label><span>Description</span><input value={description} disabled={Boolean(activeTransactionId)} onChange={(e) => setDescription(e.target.value)} placeholder="Describe the charge"/></label>
           <label className="amount"><span>Amount</span><div><i>$</i><input value={amount} disabled={Boolean(activeTransactionId)} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" placeholder="0.00"/></div></label>
           <button disabled={Boolean(activeTransactionId) || !amountCents || description.trim().length < 2} onClick={() => { if (amountCents) { setCustom({ description: description.trim(), amountCents }); setDescription(""); setAmount(""); } }}><Plus size={15}/>Add</button>
         </div>
-        {catalogState === "loading" && <div className="notice" role="status">Loading the trusted product catalog…</div>}
-        {catalogState === "error" && <div className="notice" role="alert">The product catalog is temporarily unavailable.</div>}
-        <div className="products">{products.map((product) => { const Icon = icons[product.id] ?? Wrench; const qty = quantities[product.id] ?? 0; return <button key={product.id} disabled={Boolean(activeTransactionId)} className={qty ? "product selected" : "product"} onClick={() => change(product, 1)}>
-          <span className="productIcon"><Icon size={20} strokeWidth={1.7}/></span><span className="productCopy"><small>{product.category}</small><strong>{product.displayName}</strong><b>{money.format(product.priceCents / 100)}</b></span><span className="addMark">{qty || <Plus size={14}/>}</span>
-        </button>; })}</div>
       </section>
-      <aside className="summary">
-        <div className="summaryHead"><div><span>{paymentPhase}</span><h2>Current Transaction</h2></div><span>{selected.length + (custom ? 1 : 0)} {selected.length + (custom ? 1 : 0) === 1 ? "charge" : "charges"}</span></div>
+      <aside className="summary" aria-label="Current transaction summary" data-payment-state={canceling ? "canceling" : setupRecoveryRequired ? "recovery" : paymentStatus.toLowerCase()}>
+        <div className="summaryHead"><div><span className="folioLabel">Resident folio</span><h2>Current Transaction</h2></div><span className="folioCount">{selected.length + (custom ? 1 : 0)} {selected.length + (custom ? 1 : 0) === 1 ? "charge" : "charges"}</span></div>
+        <div className="paymentPhase"><span aria-hidden="true"/>{paymentPhase}</div>
         {completedPayment && <div className="paymentSuccess" role="status"><ShieldCheck size={22}/><div><strong>Payment successful</strong><span>{money.format(completedPayment.totalCents / 100)}{completedPayment.cardBrand && completedPayment.cardLastFour ? ` · ${completedPayment.cardBrand} •••• ${completedPayment.cardLastFour}` : ""}</span></div><button onClick={() => { setCompletedPayment(null); setNotice(""); setPaymentStatus("DRAFT"); }}>New Transaction</button></div>}
         {(unit || email) && <div className="residentMini"><Building2 size={16}/><div><strong>{unit ? `Unit ${unit}` : "Unit pending"}</strong><small>{email || "Email pending"}</small></div></div>}
         <div className={selected.length || custom ? "lines" : "lines empty"}>
-          {!selected.length && !custom && <div className="emptyState"><ReceiptText size={23}/><strong>No charges yet</strong><span>Select a product or add a custom charge.</span></div>}
-          {selected.map((p) => <div className="line" key={p.id}><div><strong>{p.displayName}</strong><b>{money.format(p.priceCents * quantities[p.id] / 100)}</b></div><div className="lineBottom"><span className="qty"><button aria-label={`Decrease ${p.displayName} quantity`} disabled={Boolean(activeTransactionId)} onClick={() => change(p, -1)}><Minus size={12}/></button><input aria-label={`${p.displayName} quantity`} disabled={Boolean(activeTransactionId) || !p.quantityAllowed} inputMode="numeric" min={1} max={MAX_QUANTITY} step={1} type="number" value={quantities[p.id]} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setQuantity(p, event.target.value)}/><button aria-label={`Increase ${p.displayName} quantity`} disabled={Boolean(activeTransactionId) || !p.quantityAllowed || quantities[p.id] >= MAX_QUANTITY} onClick={() => change(p, 1)}><Plus size={12}/></button></span><button className="remove" disabled={Boolean(activeTransactionId)} onClick={() => change(p, -MAX_QUANTITY)}>Remove</button></div></div>)}
+          {!selected.length && !custom && <div className="emptyState"><span className="folioEmptyIcon"><ReceiptText size={30} strokeWidth={1.3} aria-hidden="true"/></span><strong>Your folio starts here</strong><span>Select a service or add a custom charge.<br/>The breakdown will appear here.</span></div>}
+          {selected.map((p) => <div className="line" key={p.id}><div><span><strong>{p.displayName}</strong><small className="unitPrice">{money.format(p.priceCents / 100)} each</small></span><b>{money.format(p.priceCents * quantities[p.id] / 100)}</b></div><div className="lineBottom"><span className="qty"><button aria-label={`Decrease ${p.displayName} quantity`} disabled={Boolean(activeTransactionId)} onClick={() => change(p, -1)}><Minus size={12}/></button><input aria-label={`${p.displayName} quantity`} disabled={Boolean(activeTransactionId) || !p.quantityAllowed} inputMode="numeric" min={1} max={MAX_QUANTITY} step={1} type="number" value={quantities[p.id]} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setQuantity(p, event.target.value)}/><button aria-label={`Increase ${p.displayName} quantity`} disabled={Boolean(activeTransactionId) || !p.quantityAllowed || quantities[p.id] >= MAX_QUANTITY} onClick={() => change(p, 1)}><Plus size={12}/></button></span><button className="remove" disabled={Boolean(activeTransactionId)} onClick={() => change(p, -MAX_QUANTITY)}>Remove</button></div></div>)}
           {custom && <div className="line customLine"><div><span><small>Custom charge</small><strong>{custom.description}</strong></span><b>{money.format(custom.amountCents / 100)}</b></div><button className="remove" disabled={Boolean(activeTransactionId)} onClick={() => setCustom(null)}><X size={11}/>Remove</button></div>}
         </div>
-        <div className="totals"><div><span>Subtotal</span><b>{money.format(subtotal / 100)}</b></div><div><span>Processing fee</span><b>{money.format(fee / 100)}</b></div><div className="grand"><span>Total</span><b>{money.format(total / 100)}</b></div></div>
-        {notice && <div className="notice" role="status">{notice}</div>}
-        <button className="charge" disabled={!(canProcess || canCharge) || charging || canceling} onClick={() => void prepareCharge(canProcess)}><CreditCard size={17}/>{canProcess ? "Process Payment" : setupRecoveryRequired ? "Terminal needs attention" : charging ? processRequested ? "Starting payment" : "Showing breakdown" : paymentStatus === "WAITING_FOR_CUSTOMER" ? "Payment in progress" : paymentStatus === "PROCESSING" ? "Processing payment" : paymentStatus === "PAID" ? "Payment successful" : activeTransactionId ? "Checking terminal" : "Show Breakdown"}</button>
+        <div className="totals"><div><span>Subtotal</span><b>{money.format(subtotal / 100)}</b></div><div><span>Processing fee</span><b>{money.format(fee / 100)}</b></div><div className="grand"><span>Total<small>USD</small></span><b key={total}>{money.format(total / 100)}</b></div></div>
+        {notice && <div className="notice" role="status" key={notice}>{notice}</div>}
+        <PaymentAction disabled={!(canProcess || canCharge) || charging || canceling} onClick={() => void prepareCharge(canProcess)} busy={charging || canceling || paymentStatus === "PROCESSING"} minimumBlocked={!meetsMinimumPayment(total) && !activeTransactionId && !completedPayment} success={paymentStatus === "PAID"} recovery={setupRecoveryRequired} label={canProcess ? "Process Payment" : setupRecoveryRequired ? "Terminal needs attention" : charging ? processRequested ? "Starting payment" : "Showing breakdown" : paymentStatus === "WAITING_FOR_CUSTOMER" ? "Payment in progress" : paymentStatus === "PROCESSING" ? "Processing payment" : paymentStatus === "PAID" ? "Payment successful" : activeTransactionId ? "Checking terminal" : "Show Breakdown"}/>
         {activeTransactionId && <button className="cancelPayment" disabled={canceling} onClick={async () => {
           if (cancelInFlight.current) return;
           cancelInFlight.current = true;
@@ -307,7 +311,7 @@ function NewTransaction() {
             if (epoch === flowEpoch.current) { setCanceling(false); requestInFlight.current = false; }
           }
         }}>{canceling ? "Checking cancellation…" : "Cancel"}</button>}
-        {hasRequiredDetails && !meetsMinimumPayment(total) && <p className="hint">{MINIMUM_PAYMENT_MESSAGE}</p>}
+        {!meetsMinimumPayment(total) && !activeTransactionId && !completedPayment && <p className="minimumHint" id="minimum-payment-guidance">{MINIMUM_PAYMENT_MESSAGE}</p>}
         {!hasRequiredDetails && <p className="hint">Enter resident details and add a charge to continue.</p>}
       </aside>
     </div>
@@ -346,23 +350,23 @@ function TransactionsPage() {
     if (row.paymentStatus === "CANCELED") return "Canceled attempt";
     return "In progress";
   }
-  return <><header className="pageHeader"><div><span>Payments</span><h1>Transactions</h1><p>Find resident payments and review their current status.</p></div><button className="outlineAction" disabled><Download size={14}/>Export CSV</button></header>
-    <div className="records"><div className="recordTools"><label className="recordSearch"><Search size={15}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search transaction, unit, or email"/></label><label><span>From</span><input type="date" disabled/></label><label><span>To</span><input type="date" disabled/></label></div>
+  return <><PageHeader title="Transactions" description="A clear record of every resident payment."><button className="outlineAction" disabled><Download size={17}/>Export CSV</button></PageHeader>
+    <div className="records"><div className="recordTools"><label className="recordSearch"><Search size={18} aria-hidden="true"/><input aria-label="Search transactions" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search transaction, unit, or email"/></label><label><span>From</span><input type="date" disabled/></label><label><span>To</span><input type="date" disabled/></label></div>
       {receiptMessage && <div className="historyNote" role="status">{receiptMessage}</div>}
       {historyState === "ready" && completedCount === 0 && rows.length > 0 && <div className="historyNote">No completed payments yet. Canceled, abandoned, failed, and in-progress attempts are listed below.</div>}
-      <div className="recordTable"><div className="recordHead"><span>Transaction</span><span>Date</span><span>Unit</span><span>Resident</span><span>Status</span><span>Total</span></div>
-        {historyState === "loading" && <div className="recordEmpty"><ReceiptText size={24}/><strong>Loading payment activity…</strong></div>}
-        {historyState === "error" && <div className="recordEmpty"><ReceiptText size={24}/><strong>Payment activity is unavailable</strong><p>Please refresh to try again.</p></div>}
-        {historyState === "ready" && rows.length === 0 && <div className="recordEmpty"><ReceiptText size={24}/><strong>No payment activity yet</strong><p>Completed payments and attempts will appear here.</p></div>}
-        {historyState === "ready" && rows.length > 0 && visibleRows.length === 0 && <div className="recordEmpty"><Search size={24}/><strong>No matching payment activity</strong><p>Try a different transaction, unit, or email.</p></div>}
-        {historyState === "ready" && visibleRows.map((row) => { const label = historyStatus(row); return <div className="recordRow" key={row.id}><strong>{row.number}</strong><span>{new Date(row.createdAt).toLocaleString()}</span><span>{row.unitNumber}</span><span>{row.customerEmail}</span><span className="historyStateCell"><i className={`historyStatus ${label.toLowerCase().replaceAll(" ", "-")}`}>{label}</i>{row.paymentStatus === "PAID" && <button onClick={async () => { setReceiptMessage("Sending receipt…"); const response = await authenticatedFetch(`/api/transactions/${row.id}/receipt/resend`, { method: "POST" }); setReceiptMessage(response.ok ? "Receipt sent." : "Receipt could not be sent. Verify email configuration and try again."); }}>{row.receiptStatus === "SENT" ? "Resend receipt" : "Send receipt"}</button>}</span><b>{money.format(row.totalCents / 100)}</b></div>; })}
+      <div className="recordTable" role="table" aria-label="Payment activity"><div className="recordHead" role="row"><span role="columnheader">Transaction</span><span role="columnheader">Date</span><span role="columnheader">Unit</span><span role="columnheader">Resident</span><span role="columnheader">Status</span><span role="columnheader">Total</span></div>
+        {historyState === "loading" && <div className="recordEmpty" role="row"><div role="cell" aria-colspan={6}><ReceiptText size={24}/><strong>Loading payment activity…</strong></div></div>}
+        {historyState === "error" && <div className="recordEmpty" role="row"><div role="cell" aria-colspan={6}><ReceiptText size={24}/><strong>Payment activity is unavailable</strong><p>Please refresh to try again.</p></div></div>}
+        {historyState === "ready" && rows.length === 0 && <div className="recordEmpty" role="row"><div role="cell" aria-colspan={6}><ReceiptText size={24}/><strong>No payment activity yet</strong><p>Completed payments and attempts will appear here.</p></div></div>}
+        {historyState === "ready" && rows.length > 0 && visibleRows.length === 0 && <div className="recordEmpty" role="row"><div role="cell" aria-colspan={6}><Search size={24}/><strong>No matching payment activity</strong><p>Try a different transaction, unit, or email.</p></div></div>}
+        {historyState === "ready" && visibleRows.map((row) => { const label = historyStatus(row); return <div className="recordRow" role="row" key={row.id}><strong role="cell" data-label="Transaction">{row.number}</strong><span role="cell" data-label="Date">{new Date(row.createdAt).toLocaleString()}</span><span role="cell" data-label="Unit">{row.unitNumber}</span><span role="cell" data-label="Resident">{row.customerEmail}</span><span role="cell" data-label="Status" className="historyStateCell"><i className={`historyStatus ${label.toLowerCase().replaceAll(" ", "-")}`}>{label}</i>{row.paymentStatus === "PAID" && <button onClick={async () => { setReceiptMessage("Sending receipt…"); const response = await authenticatedFetch(`/api/transactions/${row.id}/receipt/resend`, { method: "POST" }); setReceiptMessage(response.ok ? "Receipt sent." : "Receipt could not be sent. Verify email configuration and try again."); }}>{row.receiptStatus === "SENT" ? "Resend receipt" : "Send receipt"}</button>}</span><b role="cell" data-label="Total">{money.format(row.totalCents / 100)}</b></div>; })}
       </div>
     </div></>;
 }
 
 function AccountingPage() {
-  return <><header className="pageHeader"><div><span>Payments</span><h1>Accounting</h1><p>Review verified payment activity by accounting code.</p></div><button className="outlineAction" disabled><Download size={14}/>Export CSV</button></header>
-    <div className="accountingPage"><div className="accountingIntro"><div><span>Current period</span><h2>Payment allocation</h2><p>Only successfully verified payments are included.</p></div><label><CalendarDays size={14}/><input type="month"/></label></div>
+  return <><PageHeader title="Accounting" description="Verified payments, clearly allocated."><button className="outlineAction" disabled><Download size={17}/>Export CSV</button></PageHeader>
+    <div className="accountingPage"><div className="accountingIntro"><div><span>Current period</span><h2>Payment allocation</h2><p>Only successfully verified payments are included.</p></div><label><CalendarDays size={18}/><input type="month" aria-label="Accounting period"/></label></div>
       <div className="glRows"><div className="glRow"><div><span>40090</span><p>Products, services, and Custom Charges</p></div><div><small>Transactions</small><b>0</b></div><strong>$0.00</strong></div><div className="glRow"><div><span>40033</span><p>Valet Parking only</p></div><div><small>Transactions</small><b>0</b></div><strong>$0.00</strong></div></div>
       <div className="accountingEmpty"><ShieldCheck size={20}/><div><strong>Trusted allocations</strong><p>Accounting codes are assigned automatically and cannot be changed during checkout.</p></div></div>
     </div></>;
@@ -403,9 +407,9 @@ function AdminPage() {
     setName(""); setEmail(""); setRole("STAFF"); setMessage("Employee created. A secure password setup email was sent.");
     await loadEmployees();
   }
-  return <><header className="pageHeader"><div><span>Administration</span><h1>Staff Access</h1><p>Create and manage approved BrickellHouse employee accounts.</p></div></header><div className="adminPage">
+  return <><PageHeader title="Staff Access" description="The people behind a considered resident experience."/><div className="adminPage">
     <section className="adminCreate"><h2>Add employee</h2><p>No public registration is available. The employee receives a secure password setup link.</p><div><label><span>Name</span><input value={name} onChange={(event) => setName(event.target.value)} /></label><label><span>Email</span><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label><label><span>Role</span><select value={role} onChange={(event) => setRole(event.target.value as EmployeeRole)}><option value="STAFF">Staff</option><option value="ADMIN">Admin</option></select></label><button disabled={name.trim().length < 2 || !email.includes("@")} onClick={() => void createEmployee()}>Create access</button></div>{message && <div className="historyNote" role="status">{message}</div>}</section>
-    <section className="adminUsers"><h2>Approved employees</h2>{employees.map((employee) => <div className="adminUser" key={employee.id}><div><strong>{employee.name}</strong><span>{employee.email}</span><small>{employee.emailVerified ? "Email verified" : "Password setup pending"}</small></div><select value={employee.role} onChange={async (event) => { await authenticatedFetch(`/api/admin/users/${employee.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ active: employee.active, role: event.target.value }) }); await loadEmployees(); }}><option value="STAFF">Staff</option><option value="ADMIN">Admin</option></select><button onClick={async () => { await authenticatedFetch(`/api/admin/users/${employee.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ active: !employee.active, role: employee.role }) }); await loadEmployees(); }}>{employee.active ? "Disable" : "Enable"}</button>{!employee.emailVerified && <button onClick={async () => { const response = await authenticatedFetch(`/api/admin/users/${employee.id}/send-password-setup`, { method: "POST" }); setMessage(response.ok ? "Password setup email sent." : "Password setup email could not be sent."); }}>Send setup</button>}</div>)}</section>
+    <section className="adminUsers"><h2>Approved employees</h2>{employees.map((employee) => <div className="adminUser" key={employee.id}><div><strong>{employee.name}</strong><span>{employee.email}</span><small>{employee.emailVerified ? "Email verified" : "Password setup pending"}</small></div><select aria-label={`Role for ${employee.name}`} value={employee.role} onChange={async (event) => { await authenticatedFetch(`/api/admin/users/${employee.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ active: employee.active, role: event.target.value }) }); await loadEmployees(); }}><option value="STAFF">Staff</option><option value="ADMIN">Admin</option></select><button onClick={async () => { await authenticatedFetch(`/api/admin/users/${employee.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ active: !employee.active, role: employee.role }) }); await loadEmployees(); }}>{employee.active ? "Disable" : "Enable"}</button>{!employee.emailVerified && <button onClick={async () => { const response = await authenticatedFetch(`/api/admin/users/${employee.id}/send-password-setup`, { method: "POST" }); setMessage(response.ok ? "Password setup email sent." : "Password setup email could not be sent."); }}>Send setup</button>}</div>)}</section>
   </div></>;
 }
 
@@ -433,7 +437,7 @@ function SignInPage() {
     });
     setWorking(false); setMessage("If this approved employee account exists, a password reset link has been sent.");
   }
-  return <div className="signInPage"><form className="signInPanel" onSubmit={(event) => { event.preventDefault(); void (forgot ? requestReset() : signIn()); }}><div className="signInBrand"><span>BH</span><div>BrickellHouse<small>Management</small></div></div><span className="signInKicker">Internal payment management</span><h1>{forgot ? "Reset password" : "Sign in"}</h1><p>{forgot ? "Enter your approved employee email to receive a secure reset link." : "Use your approved BrickellHouse employee account."}</p><label className="accessPassword"><span>Email</span><input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} autoFocus /></label>{!forgot && <label className="accessPassword"><span>Password</span><input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>}<button type="submit" disabled={!email || (!forgot && !password) || working}>{working ? "Please wait…" : forgot ? "Send reset link" : "Sign In"}</button><button className="forgotButton" type="button" onClick={() => { setForgot(!forgot); setMessage(""); }}>{forgot ? "Back to Sign In" : "Forgot Password"}</button>{message && <div role="status">{message}</div>}</form></div>;
+  return <AccessLayout><form className="signInPanel" onSubmit={(event) => { event.preventDefault(); void (forgot ? requestReset() : signIn()); }}><Brand className="signInBrand"/><span className="signInKicker">Internal payment management</span><h1>{forgot ? "Reset password" : "Sign in"}</h1><p>{forgot ? "Enter your approved employee email to receive a secure reset link." : "Use your approved BrickellHouse employee account."}</p><label className="accessPassword"><span>Email</span><input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} autoFocus /></label>{!forgot && <label className="accessPassword"><span>Password</span><input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>}<button type="submit" disabled={!email || (!forgot && !password) || working}>{working ? "Please wait…" : forgot ? "Send reset link" : "Sign In"}</button><button className="forgotButton" type="button" onClick={() => { setForgot(!forgot); setMessage(""); }}>{forgot ? "Back to Sign In" : "Forgot Password"}</button>{message && <div role="status">{message}</div>}</form></AccessLayout>;
 }
 
 function ResetPasswordPage() {
@@ -441,7 +445,7 @@ function ResetPasswordPage() {
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState(token ? "" : "This password reset link is invalid or expired.");
   const [working, setWorking] = useState(false);
-  return <div className="signInPage"><form className="signInPanel" onSubmit={async (event) => { event.preventDefault(); if (!token) return; setWorking(true); const response = await fetch("/api/auth/reset-password", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ newPassword: password, token }) }); setWorking(false); setMessage(response.ok ? "Password set. You can now sign in." : "This password reset link is invalid or expired."); }}><div className="signInBrand"><span>BH</span><div>BrickellHouse<small>Management</small></div></div><span className="signInKicker">Secure employee access</span><h1>Set password</h1><p>Choose at least 12 characters. All existing sessions are revoked when a password is reset.</p><label className="accessPassword"><span>New password</span><input type="password" autoComplete="new-password" minLength={12} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} autoFocus /></label><button type="submit" disabled={!token || password.length < 12 || working}>{working ? "Saving…" : "Set password"}</button><button className="forgotButton" type="button" onClick={() => window.location.assign("/")}>Back to Sign In</button>{message && <div role="status">{message}</div>}</form></div>;
+  return <AccessLayout><form className="signInPanel" onSubmit={async (event) => { event.preventDefault(); if (!token) return; setWorking(true); const response = await fetch("/api/auth/reset-password", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ newPassword: password, token }) }); setWorking(false); setMessage(response.ok ? "Password set. You can now sign in." : "This password reset link is invalid or expired."); }}><Brand className="signInBrand"/><span className="signInKicker">Secure employee access</span><h1>Set password</h1><p>Choose at least 12 characters. All existing sessions are revoked when a password is reset.</p><label className="accessPassword"><span>New password</span><input type="password" autoComplete="new-password" minLength={12} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} autoFocus /></label><button type="submit" disabled={!token || password.length < 12 || working}>{working ? "Saving…" : "Set password"}</button><button className="forgotButton" type="button" onClick={() => window.location.assign("/")}>Back to Sign In</button>{message && <div role="status">{message}</div>}</form></AccessLayout>;
 }
 
 function Application({ employeeName, employeeRole, onSignOut }: { employeeName: string; employeeRole: EmployeeRole; onSignOut: () => void }) {
